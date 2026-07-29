@@ -1,0 +1,249 @@
+import { createHmac, timingSafeEqual } from 'node:crypto';
+import {
+  HistoryPageDtoSchema,
+  LeaderboardDtoSchema,
+  ParticipantDtoSchema,
+  ResolveParticipantResponseSchema,
+  type GameMode,
+  type HistoryPageDto,
+  type LeaderboardDto,
+  type ParticipantDto,
+} from '../../schemas/index.js';
+import { z } from 'zod';
+import { AppError } from '../../middleware/errors.js';
+import type { AuditContext } from '../../services/audit.js';
+import type {
+  ParticipantRepository,
+  ParticipantRecord,
+  ParticipantUpdateData,
+} from './participant.repository.js';
+
+const PAGE_SIZE = 10;
+const cursorPayloadSchema = z.object({ at: z.string().datetime(), id: z.string().uuid() });
+type HistoryCursor = z.infer<typeof cursorPayloadSchema>;
+
+export interface ParticipantScope extends AuditContext {
+  readonly institutionId: string;
+  readonly actorUserId: string;
+  readonly actorSessionId: string;
+  readonly requestId: string;
+}
+
+export interface ParticipantIdentityInput {
+  readonly displayName: string;
+  readonly participantReference: string;
+}
+
+export interface ParticipantChanges {
+  readonly displayName?: string | undefined;
+  readonly participantReference?: string | undefined;
+  readonly status?: 'ACTIVE' | 'INACTIVE' | undefined;
+}
+
+export interface HistoryFilters {
+  readonly mode?: GameMode | undefined;
+  readonly ruleVersion?: string | undefined;
+  readonly cursor?: string | undefined;
+}
+
+function participantDto(participant: ParticipantRecord): ParticipantDto {
+  return ParticipantDtoSchema.parse({
+    participantId: participant.participantId,
+    displayName: participant.displayName,
+    participantReference: participant.participantReference,
+    status: participant.status,
+    createdAt: participant.createdAt.toISOString(),
+    updatedAt: participant.updatedAt.toISOString(),
+  });
+}
+
+function normalizeDisplayName(value: string): string {
+  return value.normalize('NFKC').trim().replace(/\s+/gu, ' ').toLocaleLowerCase('id-ID');
+}
+
+function isUniqueConstraintError(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === 'P2002';
+}
+
+export class ParticipantService {
+  public constructor(
+    private readonly repository: ParticipantRepository,
+    private readonly cursorSecret: string,
+  ) {}
+
+  public async resolveParticipant(
+    scope: ParticipantScope,
+    participantReference: string,
+  ): Promise<{ participantId: string }> {
+    const participant = await this.repository.findByReference(
+      scope.institutionId,
+      participantReference,
+    );
+    if (!participant) throw new AppError(404, 'participant_not_found', 'Peserta tidak ditemukan.');
+    await this.repository.recordResolved(scope, participant.participantId);
+    return ResolveParticipantResponseSchema.parse(participant);
+  }
+
+  public async getParticipant(
+    institutionId: string,
+    participantHandle: string,
+  ): Promise<ParticipantDto> {
+    const participant = await this.repository.findByHandle(institutionId, participantHandle);
+    if (!participant) throw new AppError(404, 'participant_not_found', 'Peserta tidak ditemukan.');
+    return participantDto(participant);
+  }
+
+  public async updateParticipant(
+    scope: ParticipantScope,
+    participantHandle: string,
+    changes: ParticipantChanges,
+  ): Promise<ParticipantDto> {
+    const data: ParticipantUpdateData = {
+      ...(changes.displayName === undefined
+        ? {}
+        : {
+            displayName: changes.displayName,
+            normalizedName: normalizeDisplayName(changes.displayName),
+          }),
+      ...(changes.participantReference === undefined
+        ? {}
+        : { participantReference: changes.participantReference }),
+      ...(changes.status === undefined ? {} : { status: changes.status }),
+    };
+    let participant: ParticipantRecord | null;
+    try {
+      participant = await this.repository.updateWithAudit(
+        scope,
+        participantHandle,
+        data,
+        Object.keys(changes),
+      );
+    } catch (error) {
+      if (isUniqueConstraintError(error)) {
+        throw new AppError(409, 'participant_reference_conflict', 'Kode peserta sudah digunakan.');
+      }
+      throw error;
+    }
+    if (!participant) throw new AppError(404, 'participant_not_found', 'Peserta tidak ditemukan.');
+    return participantDto(participant);
+  }
+
+  public async participantHistory(
+    institutionId: string,
+    participantHandle: string,
+    filters: HistoryFilters,
+  ): Promise<HistoryPageDto> {
+    const participantId = await this.participantPrimaryKey(institutionId, participantHandle);
+    const cursor = filters.cursor ? this.decodeCursor(filters.cursor) : null;
+    const sessions = await this.repository.listSessions(
+      institutionId,
+      participantId,
+      {
+        ...(filters.mode ? { mode: filters.mode } : {}),
+        ...(filters.ruleVersion ? { ruleVersion: filters.ruleVersion } : {}),
+        ...(cursor ? { before: { at: new Date(cursor.at), id: cursor.id } } : {}),
+      },
+      PAGE_SIZE + 1,
+    );
+    const page = sessions.slice(0, PAGE_SIZE);
+    const last = page.at(-1);
+    return HistoryPageDtoSchema.parse({
+      items: page.map((session) => ({
+        sessionId: session.id,
+        mode: session.mode,
+        status: session.status,
+        startedAt: session.startedAt?.toISOString() ?? null,
+        completedAt: session.completedAt?.toISOString() ?? null,
+        score: session.result?.score ?? null,
+        gameRuleVersion: session.result?.gameRuleVersion ?? null,
+        metrics: session.result?.metrics ?? null,
+      })),
+      nextCursor:
+        sessions.length > PAGE_SIZE && last
+          ? this.encodeCursor({ at: last.createdAt.toISOString(), id: last.id })
+          : null,
+    });
+  }
+
+  public async participantLeaderboard(
+    institutionId: string,
+    participantHandle: string,
+    mode: GameMode,
+    ruleVersion: string,
+  ): Promise<LeaderboardDto> {
+    const participantId = await this.participantPrimaryKey(institutionId, participantHandle);
+    const results = await this.repository.listLeaderboard(
+      institutionId,
+      participantId,
+      mode,
+      ruleVersion,
+    );
+    return LeaderboardDtoSchema.parse({
+      participantId: participantHandle,
+      mode,
+      ruleVersion,
+      entries: results.map((result, index) => ({
+        rank: index + 1,
+        sessionId: result.sessionId,
+        completedAt: result.completedAt.toISOString(),
+        score: result.score,
+        metrics: result.metrics,
+      })),
+    });
+  }
+
+  public async ensureActiveParticipant(
+    institutionId: string,
+    input: ParticipantIdentityInput,
+  ): Promise<{ id: string; participantId: string }> {
+    const participant = await this.repository.ensureActiveParticipant(institutionId, {
+      ...input,
+      normalizedName: normalizeDisplayName(input.displayName),
+    });
+    if (participant.status === 'INACTIVE') {
+      throw new AppError(409, 'participant_inactive', 'Profil peserta tidak aktif.');
+    }
+    return { id: participant.id, participantId: participant.participantId };
+  }
+
+  private async participantPrimaryKey(
+    institutionId: string,
+    participantHandle: string,
+  ): Promise<string> {
+    const participant = await this.repository.findPrimaryKey(institutionId, participantHandle);
+    if (!participant) throw new AppError(404, 'participant_not_found', 'Peserta tidak ditemukan.');
+    return participant.id;
+  }
+
+  private encodeCursor(cursor: HistoryCursor): string {
+    const payload = Buffer.from(JSON.stringify(cursor)).toString('base64url');
+    const signature = createHmac('sha256', this.cursorSecret).update(payload).digest('base64url');
+    return `${payload}.${signature}`;
+  }
+
+  private decodeCursor(cursor: string): HistoryCursor {
+    const [payload, supplied, extra] = cursor.split('.');
+    if (!payload || !supplied || extra) this.invalidCursor();
+    const expected = createHmac('sha256', this.cursorSecret).update(payload).digest();
+    let actual: Buffer;
+    try {
+      actual = Buffer.from(supplied, 'base64url');
+    } catch {
+      return this.invalidCursor();
+    }
+    if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+      return this.invalidCursor();
+    }
+    try {
+      return cursorPayloadSchema.parse(
+        JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')),
+      );
+    } catch {
+      return this.invalidCursor();
+    }
+  }
+
+  private invalidCursor(): never {
+    throw new AppError(400, 'invalid_cursor', 'Cursor riwayat tidak valid.');
+  }
+}

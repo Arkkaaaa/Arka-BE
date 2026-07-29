@@ -1,0 +1,478 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum InstitutionStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum ParticipantStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum DeviceInventoryStatus {
+  ACTIVE
+  RETIRED
+  REVOKED
+}
+
+enum ReservationHolderType {
+  PREPARATION
+  SESSION
+}
+
+enum ReservationState {
+  HELD
+  RELEASING
+}
+
+enum GameMode {
+  MOTOR_GRIP
+  GO_NO_GO
+  SEQUENCE_MEMORY
+}
+
+enum PreparationState {
+  WAITING_DEVICE
+  BINDING_SETUP
+  CALIBRATING
+  PRACTICING
+  READY
+  CANCELLED
+  EXPIRED
+  CONSUMED
+}
+
+enum GameSessionStatus {
+  BINDING
+  COUNTDOWN
+  PLAYING
+  PAUSED
+  ABORTED
+  INTERRUPTED
+  COMPLETED
+  SAVING
+  SAVED
+  SAVE_FAILED
+}
+
+enum AiSummaryStatus {
+  PENDING
+  PROCESSING
+  READY
+  UNAVAILABLE
+}
+
+enum CommandKind {
+  SETUP_BIND
+  SETUP_UNBIND
+  SESSION_BIND
+  SESSION_UNBIND
+  FEEDBACK
+}
+
+enum CommandStatus {
+  PENDING
+  SENT
+  ACKED
+  NACKED
+  EXPIRED
+}
+
+enum OutboxStatus {
+  PENDING
+  PROCESSING
+  DELIVERED
+  FAILED
+}
+
+model Institution {
+  id           String            @id @default(uuid()) @db.Uuid
+  name         String            @db.VarChar(120)
+  status       InstitutionStatus @default(ACTIVE)
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+  user         User?
+  participants Participant[]
+  devices      Device[]
+  rules        GameRuleVersion[]
+  preparations GamePreparation[]
+  sessions     GameSession[]
+  results      GameResult[]
+  audits       AuditLog[]
+
+  @@index([status])
+}
+
+model User {
+  id            String    @id
+  name          String
+  email         String    @unique
+  emailVerified Boolean   @default(false)
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  institutionId String    @unique @db.Uuid
+  institution   Institution @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  sessions      Session[]
+  accounts      Account[]
+}
+
+model Session {
+  id        String   @id
+  expiresAt DateTime
+  token     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  ipAddress String?
+  userAgent String?
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Account {
+  id                    String    @id
+  accountId             String
+  providerId            String
+  userId                String
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  scope                 String?
+  password              String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@unique([providerId, accountId])
+  @@index([userId])
+}
+
+model Verification {
+  id         String   @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([identifier])
+}
+
+model Participant {
+  id                   String            @id @default(uuid()) @db.Uuid
+  participantId        String            @unique @db.VarChar(128)
+  institutionId        String            @db.Uuid
+  institution          Institution       @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  participantReference String            @db.VarChar(64)
+  displayName          String            @db.VarChar(100)
+  normalizedName       String            @db.VarChar(100)
+  status               ParticipantStatus @default(ACTIVE)
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+  preparations         GamePreparation[]
+  sessions             GameSession[]
+  results              GameResult[]
+
+  @@unique([institutionId, participantReference])
+  @@unique([id, institutionId], map: "Participant_tenant_identity_key")
+  @@index([institutionId, status])
+}
+
+model Device {
+  deviceId                    String                @id @db.VarChar(80)
+  institutionId               String                @db.Uuid
+  institution                 Institution           @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  label                       String                @db.VarChar(100)
+  inventoryStatus             DeviceInventoryStatus @default(ACTIVE)
+  credentialCiphertext        Bytes
+  credentialKeyVersion        Int                   @default(1)
+  firmwareVersion             String?               @db.VarChar(80)
+  capabilitySnapshot          Json                  @default("[]")
+  provisionedAt               DateTime              @default(now())
+  credentialRotatedAt         DateTime?
+  revokedAt                   DateTime?
+  lastAuthenticatedAt         DateTime?
+  reservation                DeviceReservation?
+  preparations               GamePreparation[]
+  sessions                   GameSession[]
+  commands                   DeviceCommand[]
+
+  @@index([institutionId, inventoryStatus])
+  @@unique([deviceId, institutionId], map: "Device_tenant_identity_key")
+}
+
+model DeviceReservation {
+  deviceId         String                @id @db.VarChar(80)
+  device           Device                @relation(fields: [deviceId], references: [deviceId], onDelete: Cascade)
+  reservationId    String                @unique @db.Uuid
+  institutionId    String                @db.Uuid
+  holderType       ReservationHolderType
+  preparationId    String?               @unique @db.Uuid
+  preparation      GamePreparation?      @relation(fields: [preparationId], references: [id], onDelete: Restrict)
+  sessionId        String?               @unique @db.Uuid
+  session          GameSession?          @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  state             ReservationState     @default(HELD)
+  releaseCommandId String?               @unique @db.Uuid
+  acquiredAt       DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  @@index([institutionId, state])
+}
+
+model GameRuleVersion {
+  id            String      @id @default(uuid()) @db.Uuid
+  institutionId String      @db.Uuid
+  institution   Institution @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  mode          GameMode
+  version       String      @db.VarChar(80)
+  config        Json
+  isActive      Boolean     @default(false)
+  approvedAt    DateTime?
+  createdAt     DateTime    @default(now())
+  preparations  GamePreparation[]
+  sessions      GameSession[]
+  results       GameResult[]
+
+  @@unique([institutionId, mode, version])
+  @@unique([id, institutionId, mode], map: "GameRuleVersion_tenant_mode_key")
+  @@index([institutionId, mode, isActive])
+}
+
+model GamePreparation {
+  id                    String           @id @default(uuid()) @db.Uuid
+  preparationId         String           @unique @db.VarChar(128)
+  setupId               String           @unique @db.Uuid
+  institutionId         String           @db.Uuid
+  institution           Institution      @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  ownerSessionId        String           @db.VarChar(191)
+  participantId         String?          @db.Uuid
+  participant           Participant?     @relation(fields: [participantId], references: [id], onDelete: Restrict)
+  displayNameSnapshot   String           @db.VarChar(100)
+  participantRefSnapshot String?         @db.VarChar(64)
+  mode                  GameMode
+  deviceId              String           @db.VarChar(80)
+  device                Device           @relation(fields: [deviceId], references: [deviceId], onDelete: Restrict)
+  ruleVersionId         String           @db.Uuid
+  ruleVersion           GameRuleVersion  @relation(fields: [ruleVersionId], references: [id], onDelete: Restrict)
+  configSnapshot        Json
+  firmwareSnapshot      Json?
+  capabilitySnapshot    Json
+  calibrationSnapshot   Json?
+  state                 PreparationState @default(WAITING_DEVICE)
+  setupBoundAt          DateTime?
+  practiceCompletedAt   DateTime?
+  privacyAcknowledgedAt DateTime
+  expiresAt             DateTime
+  consumedAt            DateTime?
+  cancelledAt           DateTime?
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+  reservation           DeviceReservation?
+  sessions              GameSession[]
+
+  @@index([institutionId, ownerSessionId, state])
+  @@index([expiresAt, state])
+  @@unique([id, institutionId, deviceId], map: "GamePreparation_tenant_device_key")
+  @@unique([id, institutionId, deviceId, mode, ruleVersionId, ownerSessionId], map: "GamePreparation_session_source_key")
+}
+
+model SessionCreationRequest {
+  id                String      @id @default(uuid()) @db.Uuid
+  ownerSessionId    String      @db.VarChar(191)
+  idempotencyKey    String      @db.VarChar(128)
+  requestFingerprint String     @db.Char(64)
+  responseSnapshot  Json
+  sessionId         String      @unique @db.Uuid
+  session           GameSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  createdAt         DateTime    @default(now())
+  expiresAt         DateTime
+
+  @@unique([ownerSessionId, idempotencyKey])
+  @@index([expiresAt])
+}
+
+model GameSession {
+  id                           String            @id @default(uuid()) @db.Uuid
+  institutionId                String            @db.Uuid
+  institution                  Institution       @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  ownerSessionId               String            @db.VarChar(191)
+  participantId                String?           @db.Uuid
+  participant                  Participant?      @relation(fields: [participantId], references: [id], onDelete: Restrict)
+  preparationId                String            @db.Uuid
+  preparation                  GamePreparation   @relation(fields: [preparationId], references: [id], onDelete: Restrict)
+  displayNameSnapshot          String            @db.VarChar(100)
+  mode                         GameMode
+  deviceId                     String            @db.VarChar(80)
+  device                       Device            @relation(fields: [deviceId], references: [deviceId], onDelete: Restrict)
+  reservationId               String            @db.Uuid
+  ruleVersionId                String            @db.Uuid
+  ruleVersion                  GameRuleVersion   @relation(fields: [ruleVersionId], references: [id], onDelete: Restrict)
+  configSnapshot               Json
+  firmwareSnapshot             Json?
+  capabilitySnapshot           Json
+  calibrationSnapshot          Json?
+  gameRuleVersionSnapshot      String            @db.VarChar(80)
+  status                       GameSessionStatus @default(BINDING)
+  bindingDeadlineAt            DateTime
+  sessionBoundAt               DateTime?
+  companionArrivedAt           DateTime?
+  activationId                 String?           @unique @db.Uuid
+  activationSnapshot           Json?
+  countdownEndsAt              DateTime?
+  startedAt                    DateTime?
+  pausedAt                     DateTime?
+  pausedState                  Json?
+  completedAt                  DateTime?
+  terminalReason               String?           @db.VarChar(100)
+  finalizationRecoveryExpiresAt DateTime?
+  finalizationPayload           Json?
+  finalizationLeaseToken       String?            @db.Uuid
+  finalizationLeaseExpiresAt   DateTime?
+  finalizationFailedAt         DateTime?
+  createdAt                    DateTime           @default(now())
+  updatedAt                    DateTime           @updatedAt
+  reservation                 DeviceReservation?
+  creationRequest             SessionCreationRequest?
+  result                       GameResult?
+  trials                       GameTrial[]
+  aiSummary                    AiSessionSummary?
+  commands                     DeviceCommand[]
+
+  @@index([institutionId, participantId, completedAt])
+  @@index([status, finalizationRecoveryExpiresAt])
+  @@index([ownerSessionId, status])
+  @@unique([id, institutionId, deviceId, reservationId], map: "GameSession_reservation_holder_key")
+  @@unique([id, institutionId, mode, ruleVersionId], map: "GameSession_result_source_key")
+}
+
+model GameResult {
+  id                   String          @id @default(uuid()) @db.Uuid
+  sessionId            String          @unique @db.Uuid
+  session              GameSession     @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  institutionId        String          @db.Uuid
+  institution          Institution     @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  participantId        String?         @db.Uuid
+  participant          Participant?    @relation(fields: [participantId], references: [id], onDelete: Restrict)
+  mode                 GameMode
+  ruleVersionId        String          @db.Uuid
+  ruleVersion          GameRuleVersion @relation(fields: [ruleVersionId], references: [id], onDelete: Restrict)
+  gameRuleVersion      String          @db.VarChar(80)
+  score                Int
+  metrics              Json
+  calibrationContext   Json?
+  deviceSnapshot       Json
+  browserSnapshot      Json?
+  lifecycleTrace       Json
+  completedAt          DateTime
+  savedAt              DateTime        @default(now())
+
+  @@index([institutionId, participantId, mode, gameRuleVersion, score, completedAt])
+}
+
+model GameTrial {
+  id           String      @id @default(uuid()) @db.Uuid
+  sessionId    String      @db.Uuid
+  session      GameSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  trialIndex   Int
+  attemptIndex Int         @default(0)
+  kind         String      @db.VarChar(40)
+  payload      Json
+  startedAt    DateTime
+  closedAt     DateTime
+  createdAt    DateTime    @default(now())
+
+  @@unique([sessionId, trialIndex, attemptIndex])
+  @@index([sessionId])
+}
+
+model AiSessionSummary {
+  id             String          @id @default(uuid()) @db.Uuid
+  sessionId      String          @unique @db.Uuid
+  session        GameSession     @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  status         AiSummaryStatus @default(PENDING)
+  attemptCount   Int             @default(0)
+  leaseToken     String?         @db.Uuid
+  leaseExpiresAt DateTime?
+  availableAt       DateTime        @default(now())
+  summaryText    String?         @db.VarChar(280)
+  observations   Json?
+  unavailableReason String?      @db.VarChar(80)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@index([status, availableAt, leaseExpiresAt])
+}
+
+model DeviceCommand {
+  id                String        @id @default(uuid()) @db.Uuid
+  commandId         String        @unique @db.Uuid
+  deviceId          String        @db.VarChar(80)
+  device            Device        @relation(fields: [deviceId], references: [deviceId], onDelete: Restrict)
+  reservationId     String?       @db.Uuid
+  sessionId         String?       @db.Uuid
+  session           GameSession?  @relation(fields: [sessionId], references: [id], onDelete: Restrict)
+  associationId     String?       @db.Uuid
+  kind              CommandKind
+  sequence          BigInt
+  connectionId      String?       @db.Uuid
+  bootId            String?       @db.Uuid
+  status            CommandStatus @default(PENDING)
+  payload            Json
+  expiresAt          DateTime
+  sentAt             DateTime?
+  acknowledgedAt     DateTime?
+  nackReason         String?       @db.VarChar(80)
+  createdAt          DateTime      @default(now())
+
+  @@unique([deviceId, sequence])
+  @@index([deviceId, status, expiresAt])
+  @@index([sessionId])
+}
+
+model AuditLog {
+  id            String       @id @default(uuid()) @db.Uuid
+  institutionId String?      @db.Uuid
+  institution   Institution? @relation(fields: [institutionId], references: [id], onDelete: SetNull)
+  actorUserId   String?      @db.VarChar(191)
+  actorSessionId String?     @db.VarChar(191)
+  action        String       @db.VarChar(80)
+  targetType    String?      @db.VarChar(60)
+  targetId      String?      @db.VarChar(191)
+  outcome       String       @db.VarChar(40)
+  requestId     String?      @db.Uuid
+  metadata      Json?
+  createdAt     DateTime     @default(now())
+
+  @@index([institutionId, createdAt])
+  @@index([action, createdAt])
+}
+
+model OutboxEvent {
+  id             String       @id @default(uuid()) @db.Uuid
+  eventKey       String       @unique @db.VarChar(191)
+  type           String       @db.VarChar(80)
+  payload        Json
+  status         OutboxStatus @default(PENDING)
+  attemptCount   Int          @default(0)
+  leaseToken     String?      @db.Uuid
+  leaseExpiresAt DateTime?
+  availableAt    DateTime     @default(now())
+  deliveredAt    DateTime?
+  lastErrorCode  String?      @db.VarChar(80)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([status, availableAt, leaseExpiresAt])
+}
