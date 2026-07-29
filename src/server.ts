@@ -97,6 +97,8 @@ app.all(
 
 app.use(express.json({ limit: '64kb', strict: true, type: 'application/json' }));
 app.get('/api/v1/auth/capabilities', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  res.setHeader('Pragma', 'no-cache');
   res.status(200).json(buildAuthCapabilities(env));
 });
 app.use(
