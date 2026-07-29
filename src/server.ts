@@ -12,6 +12,7 @@ import { closeHttpServer } from './lifecycle.js';
 import { connectRedis, createRedis, isRedisConnected } from './db/redis.js';
 import { errorHandler, notFoundHandler } from './middleware/errors.js';
 import { rateLimit } from './middleware/rate-limit.js';
+import { prettyHttpLogger } from './middleware/http-logger.js';
 import { requestIdMiddleware } from './middleware/request-id.js';
 import {
   authenticate,
@@ -56,8 +57,10 @@ app.use(
     logger,
     genReqId: (request) =>
       (request as typeof request & { requestId?: string }).requestId ?? 'request-id-unavailable',
+    autoLogging: false,
   }),
 );
+app.use(prettyHttpLogger);
 app.use(
   helmet({
     contentSecurityPolicy: {

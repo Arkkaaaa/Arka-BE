@@ -6,11 +6,10 @@
   "scripts": {
     "predev": "prisma generate",
     "dev": "tsx watch --env-file=.env src/server.ts",
-    "build": "prisma generate && tsc -p tsconfig.json",
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && prisma generate && tsc -p tsconfig.json",
     "start": "node dist/server.js",
     "start:local": "node --env-file=.env dist/server.js",
     "typecheck": "prisma generate && tsc -p tsconfig.json --noEmit",
-    "test": "vitest run",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate deploy",
     "seed": "tsx prisma/seed.ts"
@@ -37,7 +36,6 @@
     "zod": "^4.1.12"
   },
   "devDependencies": {
-    "tsx": "^4.20.6",
-    "vitest": "^4.1.0"
+    "tsx": "^4.20.6"
   }
 }

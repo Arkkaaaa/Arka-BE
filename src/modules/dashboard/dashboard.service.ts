@@ -1,9 +1,26 @@
 import { mapDeviceSnapshot } from '../device/device.service.js';
 import type { DashboardRepository } from './dashboard.repository.js';
-import { DashboardSummaryDtoSchema, type DashboardSummaryDto } from './dashboard.validation.js';
+import {
+  DashboardActivityDtoSchema,
+  DashboardSummaryDtoSchema,
+  type DashboardActivityDto,
+  type DashboardSummaryDto,
+} from './dashboard.validation.js';
 
 export class DashboardService {
   constructor(private readonly repository: DashboardRepository) {}
+
+  async activity(institutionId: string): Promise<DashboardActivityDto> {
+    const activity = await this.repository.activity(institutionId);
+    return DashboardActivityDtoSchema.parse({
+      ...activity,
+      latestSavedAt: activity.latestSavedAt?.toISOString() ?? null,
+      modes: activity.modes.map((mode) => ({
+        ...mode,
+        latestSavedAt: mode.latestSavedAt?.toISOString() ?? null,
+      })),
+    });
+  }
 
   async summary(institutionId: string): Promise<DashboardSummaryDto> {
     const snapshots = await this.repository.listInstitutionDeviceSnapshots(institutionId);

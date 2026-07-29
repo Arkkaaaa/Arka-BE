@@ -34,6 +34,18 @@ export const AuthCapabilitiesDtoSchema = z
   .strict();
 export type AuthCapabilitiesDto = z.infer<typeof AuthCapabilitiesDtoSchema>;
 
+export const InstitutionOnboardingRequestSchema = z.object({
+  institutionName: InstitutionNameSchema,
+});
+export type InstitutionOnboardingRequest = z.infer<typeof InstitutionOnboardingRequestSchema>;
+export const InstitutionOnboardingStatusSchema = z.object({
+  required: z.boolean(),
+  user: z.object({ email: z.string().email(), name: z.string().min(1), image: z.string().url().nullable() }),
+  institution: z.object({ id: z.string().uuid(), name: InstitutionNameSchema }).nullable(),
+  csrfToken: z.string().min(32),
+});
+export type InstitutionOnboardingStatus = z.infer<typeof InstitutionOnboardingStatusSchema>;
+
 export const ProfileImageUrlSchema = z
   .string()
   .max(2048)
@@ -111,6 +123,22 @@ export const DashboardSummaryDtoSchema = z.object({
   totalActiveDevices: z.number().int().nonnegative(),
   readinessMessage: z.string(),
 });
+export const DashboardActivityDtoSchema = z.object({
+  activeParticipants: z.number().int().nonnegative(),
+  savedSessionsTotal: z.number().int().nonnegative(),
+  savedSessionsLast7Days: z.number().int().nonnegative(),
+  latestSavedAt: IsoDateSchema.nullable(),
+  modes: z.array(
+    z.object({
+      mode: GameModeSchema,
+      savedSessions: z.number().int().nonnegative(),
+      sessionsLast7Days: z.number().int().nonnegative(),
+      latestSavedAt: IsoDateSchema.nullable(),
+      latestRuleVersion: z.string().max(80).nullable(),
+    }),
+  ).length(3),
+});
+export type DashboardActivityDto = z.infer<typeof DashboardActivityDtoSchema>;
 
 export const CreatePreparationRequestSchema = z.object({
   mode: GameModeSchema,

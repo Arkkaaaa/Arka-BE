@@ -38,7 +38,8 @@ export class SessionActivityService {
     const now = Date.now();
     const absoluteExpiry = session.createdAt.getTime() + ABSOLUTE_TIMEOUT_MS;
     const providerExpiry = session.expiresAt.getTime();
-    let lastActivity = Number(await this.repository.readLastActivity(ownerSessionId));
+    const storedActivity = await this.repository.readLastActivity(ownerSessionId);
+    let lastActivity = storedActivity === null ? Number.NaN : Number(storedActivity);
     if (!Number.isFinite(lastActivity)) {
       const initialActivity = session.createdAt.getTime();
       await this.repository.initializeLastActivity(

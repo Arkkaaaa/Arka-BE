@@ -55,7 +55,7 @@ export class AuthRepository {
         user: { select: { institutionId: true } },
       },
     });
-    if (!session) return null;
+    if (!session?.user.institutionId) return null;
     return {
       userId: session.userId,
       institutionId: session.user.institutionId,
@@ -69,7 +69,7 @@ export class AuthRepository {
       where: { id: ownerSessionId },
       select: { userId: true, user: { select: { institutionId: true } } },
     });
-    if (!session) return null;
+    if (!session?.user.institutionId) return null;
     return { userId: session.userId, institutionId: session.user.institutionId };
   }
 

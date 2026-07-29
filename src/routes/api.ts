@@ -3,6 +3,7 @@ import type { Env } from '../config/env.js';
 import type { RedisClient } from '../db/redis.js';
 import type { PrismaClient } from '../generated/prisma/client.js';
 import { AppError, asyncHandler } from '../middleware/errors.js';
+import { requireInstitution } from '../middleware/security.js';
 import { AuthController } from '../modules/auth/auth.controller.js';
 import { createAuthRouter } from '../modules/auth/auth.routes.js';
 import {
@@ -53,7 +54,7 @@ export function createApiRouter(dependencies: ApiRouterDependencies): Router {
   const router = Router();
   const activity = mutationActivity(dependencies.touchSession);
 
-  const authController = new AuthController(dependencies.env.BETTER_AUTH_SECRET);
+  const authController = new AuthController(dependencies.env.BETTER_AUTH_SECRET, dependencies.prisma);
   const participantController = new ParticipantController(
     new ParticipantService(
       new ParticipantRepository(dependencies.prisma),
@@ -63,7 +64,7 @@ export function createApiRouter(dependencies: ApiRouterDependencies): Router {
   const deviceRepository = new DeviceRepository(dependencies.prisma, dependencies.redis);
   const deviceController = new DeviceController(new DeviceService(deviceRepository));
   const dashboardController = new DashboardController(
-    new DashboardService(new DashboardRepository(deviceRepository)),
+    new DashboardService(new DashboardRepository(dependencies.prisma, deviceRepository)),
   );
   const gameController = new GameController(
     new GameService(
@@ -74,6 +75,7 @@ export function createApiRouter(dependencies: ApiRouterDependencies): Router {
   );
 
   router.use(createAuthRouter(authController));
+  router.use(requireInstitution);
   router.use(createParticipantRouter(participantController, activity));
   router.use(createDeviceRoutes(deviceController, activity));
   router.use(createGameRoutes(gameController, activity));

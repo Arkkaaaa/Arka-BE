@@ -35,8 +35,12 @@ if current == 1 then redis.call('EXPIRE', KEYS[1], 2) end
 return current
 `;
 
+type OnboardedRealtimeAuthSession = RealtimeAuthSession & {
+  readonly user: RealtimeAuthSession['user'] & { readonly institutionId: string };
+};
+
 interface AuthorizedUpgrade {
-  readonly auth: RealtimeAuthSession;
+  readonly auth: OnboardedRealtimeAuthSession;
   readonly connectionId: string;
 }
 
@@ -83,15 +87,22 @@ function sendError(socket: WebSocket, code: string, message: string): void {
 async function authenticate(
   request: IncomingMessage,
   dependencies: RealtimeDependencies,
-): Promise<RealtimeAuthSession | null> {
+): Promise<OnboardedRealtimeAuthSession | null> {
   try {
     const auth = await dependencies.auth.api.getSession({ headers: webHeaders(request.headers) });
+    if (!auth) return null;
+    const user = await dependencies.prisma.user.findUnique({
+      where: { id: auth.user.id },
+      select: { institutionId: true },
+    });
+    const institutionId = user?.institutionId;
     if (
-      !auth ||
-      !(await dependencies.validateSession(auth.session.id, auth.user.id, auth.user.institutionId))
-    )
+      !institutionId ||
+      !(await dependencies.validateSession(auth.session.id, auth.user.id, institutionId))
+    ) {
       return null;
-    return auth;
+    }
+    return { ...auth, user: { ...auth.user, institutionId } };
   } catch {
     return null;
   }
@@ -100,7 +111,7 @@ async function authenticate(
 async function ownsScope(
   scope: Scope,
   id: string,
-  auth: RealtimeAuthSession,
+  auth: OnboardedRealtimeAuthSession,
   dependencies: RealtimeDependencies,
 ): Promise<boolean> {
   if (scope === 'setup') {

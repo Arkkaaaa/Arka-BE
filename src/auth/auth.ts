@@ -4,7 +4,6 @@ import { APIError, createAuthMiddleware } from 'better-auth/api';
 import type { Env } from '../config/env.js';
 import type { PrismaClient } from '../generated/prisma/client.js';
 import {
-  deriveInstitutionName,
   InstitutionNameError,
   validateRegistrationInstitutionName,
 } from './institution-provisioning.js';
@@ -16,7 +15,7 @@ export interface AuthSession {
     email: string;
     name: string;
     image?: string | null | undefined;
-    institutionId: string;
+    institutionId?: string | null | undefined;
   };
 }
 
@@ -61,7 +60,7 @@ export function createAuth(prisma: PrismaClient, env: Env): Auth {
       requireEmailVerification: false,
       minPasswordLength: 8,
       maxPasswordLength: 128,
-      autoSignIn: true,
+      autoSignIn: false,
     },
     ...(env.googleOAuth === null
       ? {}
@@ -70,6 +69,8 @@ export function createAuth(prisma: PrismaClient, env: Env): Auth {
             google: {
               clientId: env.googleOAuth.clientId,
               clientSecret: env.googleOAuth.clientSecret,
+              redirectURI: new URL('/api/auth/callback/google', env.BETTER_AUTH_URL).toString(),
+              disableImplicitSignUp: true,
             },
           },
         }),
@@ -83,10 +84,10 @@ export function createAuth(prisma: PrismaClient, env: Env): Auth {
                 message: 'Akun belum dapat dibuat.',
               });
             }
-            const institutionName =
-              context.path === '/sign-up/email'
-                ? validateRegistrationInstitutionName(user.name)
-                : deriveInstitutionName(user.name, user.email);
+            if (context.path !== '/sign-up/email') {
+              return { data: { ...user, institutionId: null } };
+            }
+            const institutionName = validateRegistrationInstitutionName(user.name);
             const adapter = await getCurrentAdapter(context.context.adapter);
             const institution = await adapter.create<
               { name: string; status: 'ACTIVE' },
@@ -111,7 +112,7 @@ export function createAuth(prisma: PrismaClient, env: Env): Auth {
       additionalFields: {
         institutionId: {
           type: 'string',
-          required: true,
+          required: false,
           input: false,
           returned: true,
         },

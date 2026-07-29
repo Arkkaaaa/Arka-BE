@@ -6,7 +6,7 @@ import type { Env } from '../config/env.js';
 
 export interface RealtimeAuthSession {
   readonly session: { readonly id: string };
-  readonly user: { readonly id: string; readonly institutionId: string };
+  readonly user: { readonly id: string; readonly institutionId?: string | null | undefined };
 }
 
 export interface RealtimeAuth {

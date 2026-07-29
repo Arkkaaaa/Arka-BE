@@ -5,6 +5,12 @@ import type { DashboardService } from './dashboard.service.js';
 export class DashboardController {
   constructor(private readonly service: DashboardService) {}
 
+  readonly activity: RequestHandler = async (req, res) => {
+    if (!req.authContext)
+      throw new AppError(401, 'unauthorized', 'Silakan masuk untuk melanjutkan.');
+    res.json(await this.service.activity(req.authContext.institutionId));
+  };
+
   readonly summary: RequestHandler = async (req, res) => {
     if (!req.authContext)
       throw new AppError(401, 'unauthorized', 'Silakan masuk untuk melanjutkan.');

@@ -72,33 +72,60 @@ export function authenticate(
 ): RequestHandler {
   return asyncHandler(async (req, _res, next) => {
     const session = await auth.api.getSession({ headers: requestHeaders(req.headers) });
-    if (!session?.user.institutionId)
-      throw new AppError(401, 'unauthorized', 'Silakan masuk untuk melanjutkan.');
-    const institution = await prisma.institution.findFirst({
-      where: { id: session.user.institutionId, status: 'ACTIVE', user: { id: session.user.id } },
-      select: { id: true, name: true },
+    if (!session) throw new AppError(401, 'unauthorized', 'Silakan masuk untuk melanjutkan.');
+    const user = await prisma.user.findUnique({
+      where: { id: session.user.id },
+      select: {
+        institutionId: true,
+        institution: { select: { id: true, name: true, status: true } },
+      },
     });
-    if (!institution) throw new AppError(401, 'unauthorized', 'Sesi tidak lagi berlaku.');
-    if (!(await validateSession(session.session.id, session.user.id, session.user.institutionId)))
+    if (!user) throw new AppError(401, 'unauthorized', 'Sesi tidak lagi berlaku.');
+    const institution = user.institution?.status === 'ACTIVE' ? user.institution : null;
+    if (user.institutionId && !institution) {
       throw new AppError(401, 'unauthorized', 'Sesi tidak lagi berlaku.');
-    req.authContext = {
+    }
+    if (
+      user.institutionId &&
+      !(await validateSession(session.session.id, session.user.id, user.institutionId))
+    ) {
+      throw new AppError(401, 'unauthorized', 'Sesi tidak lagi berlaku.');
+    }
+    const sessionContext = {
       userId: session.user.id,
       email: session.user.email,
       name: session.user.name,
       image: profileImageUrl(session.user.image),
-      institutionId: institution.id,
-      institutionName: institution.name,
+      institutionId: institution?.id ?? null,
+      institutionName: institution?.name ?? null,
       sessionId: session.session.id,
       sessionExpiresAt: session.session.expiresAt,
     };
+    req.sessionContext = sessionContext;
+    if (institution) {
+      req.authContext = {
+        ...sessionContext,
+        institutionId: institution.id,
+        institutionName: institution.name,
+      };
+    }
     next();
   });
 }
 
+export const requireInstitution: RequestHandler = (req, _res, next) => {
+  if (!req.authContext?.institutionId || !req.authContext.institutionName) {
+    return next(
+      new AppError(403, 'institution_onboarding_required', 'Lengkapi data institusi untuk melanjutkan.'),
+    );
+  }
+  next();
+};
+
 export function requireCsrf(secret: string): RequestHandler {
   return (req, _res, next) => {
     if (!UNSAFE_METHODS.has(req.method)) return next();
-    const context = req.authContext;
+    const context = req.sessionContext;
     if (!context || !validCsrf(req.get('x-csrf-token'), csrfToken(context.sessionId, secret))) {
       return next(
         new AppError(

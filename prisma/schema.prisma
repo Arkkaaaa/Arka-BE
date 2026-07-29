@@ -119,8 +119,8 @@ model User {
   image         String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
-  institutionId String    @unique @db.Uuid
-  institution   Institution @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  institutionId String?     @unique @db.Uuid
+  institution   Institution? @relation(fields: [institutionId], references: [id], onDelete: Restrict)
   sessions      Session[]
   accounts      Account[]
 }

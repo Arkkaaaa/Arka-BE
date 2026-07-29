@@ -31,10 +31,34 @@ const REDACT_PATHS = [
   '*.prompt',
   'response',
   '*.response',
+  'email',
+  '*.email',
+  'name',
+  '*.name',
+  'image',
+  '*.image',
+  'participantId',
+  '*.participantId',
+  'sessionId',
+  '*.sessionId',
+  'metrics',
+  '*.metrics',
+  'summaryText',
+  '*.summaryText',
+  'observations',
+  '*.observations',
+  'userId',
+  '*.userId',
+  'institutionId',
+  '*.institutionId',
+  'deviceId',
+  '*.deviceId',
+  'preparationId',
+  '*.preparationId',
 ];
 
 const SENSITIVE_KEY =
-  /(?:authorization|cookie|password|secret|token|credential|proof|participantreference|displayname|telemetry|fsrraw|prompt|response)/iu;
+  /(?:authorization|cookie|password|secret|token|credential|proof|participantreference|participantid|displayname|telemetry|fsrraw|prompt|response|email|name|image|sessionid|metrics|summarytext|observations|userid|institutionid|deviceid|preparationid)/iu;
 
 function redactValue(value: unknown, seen: WeakSet<object>): unknown {
   if (value === null || typeof value !== 'object') return value;
