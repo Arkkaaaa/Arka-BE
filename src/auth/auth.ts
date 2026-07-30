@@ -1,6 +1,7 @@
 import { betterAuth, getCurrentAdapter } from 'better-auth';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 import { APIError, createAuthMiddleware } from 'better-auth/api';
+import { openAPI } from 'better-auth/plugins';
 import type { Env } from '../config/env.js';
 import type { PrismaClient } from '../generated/prisma/client.js';
 import {
@@ -31,6 +32,7 @@ export function createAuth(prisma: PrismaClient, env: Env): Auth {
     secret: env.BETTER_AUTH_SECRET,
     trustedOrigins: [...env.browserOrigins],
     database: prismaAdapter(prisma, { provider: 'postgresql', transaction: true }),
+    plugins: [openAPI({ disableDefaultReference: true })],
     hooks: {
       before: createAuthMiddleware((context) => {
         if (context.path !== '/sign-up/email') return Promise.resolve();

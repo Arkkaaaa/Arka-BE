@@ -53,6 +53,9 @@ function validCsrf(supplied: string | undefined, expected: string): boolean {
 
 function profileImageUrl(raw: string | null | undefined): string | null {
   if (!raw) return null;
+  if (/^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+=*$/u.test(raw)) {
+    return raw.length <= 48_000 ? raw : null;
+  }
   let parsed: URL;
   try {
     parsed = new URL(raw);

@@ -2,8 +2,10 @@ import { mapDeviceSnapshot } from '../device/device.service.js';
 import type { DashboardRepository } from './dashboard.repository.js';
 import {
   DashboardActivityDtoSchema,
+  DashboardProgressDtoSchema,
   DashboardSummaryDtoSchema,
   type DashboardActivityDto,
+  type DashboardProgressDto,
   type DashboardSummaryDto,
 } from './dashboard.validation.js';
 
@@ -19,6 +21,55 @@ export class DashboardService {
         ...mode,
         latestSavedAt: mode.latestSavedAt?.toISOString() ?? null,
       })),
+    });
+  }
+
+  async progress(institutionId: string): Promise<DashboardProgressDto> {
+    const progress = await this.repository.progress(institutionId);
+    return DashboardProgressDtoSchema.parse({
+      generatedAt: progress.generatedAt.toISOString(),
+      participants: progress.participants.map((participant) => {
+        const scoreDelta =
+          participant.latest && participant.previousComparableScore !== null
+            ? participant.latest.score - participant.previousComparableScore
+            : null;
+        const progressStatus =
+          scoreDelta === null
+            ? 'NO_BASELINE'
+            : scoreDelta > 0
+              ? 'IMPROVED'
+              : scoreDelta < 0
+                ? 'LOWER'
+                : 'MAINTAINED';
+        const achievementStatus =
+          participant.savedSessionsTotal === 0
+            ? 'NOT_STARTED'
+            : participant.savedSessionsTotal === 1
+              ? 'FIRST_SESSION'
+              : scoreDelta !== null && scoreDelta > 0
+                ? 'IMPROVED'
+                : participant.activeWeeksLast4 >= 3
+                  ? 'CONSISTENT'
+                  : 'CONTINUING';
+        return {
+          participantId: participant.participantId,
+          displayName: participant.displayName,
+          savedSessionsTotal: participant.savedSessionsTotal,
+          sessionsLast7Days: participant.sessionsLast7Days,
+          activeWeeksLast4: participant.activeWeeksLast4,
+          lastSession: participant.latest
+            ? {
+                mode: participant.latest.mode,
+                completedAt: participant.latest.completedAt.toISOString(),
+              }
+            : null,
+          progress:
+            progressStatus === 'NO_BASELINE'
+              ? { status: progressStatus, scoreDelta: null }
+              : { status: progressStatus, scoreDelta },
+          achievementStatus,
+        };
+      }),
     });
   }
 

@@ -32,11 +32,12 @@ return 'ACCEPT'
 
 export async function enforceDeviceSequence(
   redis: Redis,
+  deviceKey: string,
   bootId: string,
   message: AuthenticatedDeviceMessage,
   receivedAtMs = Date.now(),
 ): Promise<DeviceSequenceDecision> {
-  const prefix = `jalin:device:boot:${message.deviceId}:${bootId}`;
+  const prefix = `arka:device:boot:${deviceKey}:${bootId}`;
   const second = Math.floor(receivedAtMs / 1_000);
   const result = await redis.eval(
     ENFORCE_SEQUENCE_SCRIPT,

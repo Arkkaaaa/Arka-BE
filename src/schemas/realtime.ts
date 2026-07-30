@@ -26,6 +26,8 @@ export const SetupVisualSchema = z.object({
   state: PreparationStateSchema,
   instruction: z.string(),
   setupBound: z.boolean(),
+  checkedButton: z.enum(['RED', 'GREEN', 'BLUE', 'YELLOW', 'MULTIPLE']).nullable(),
+  buttonCheckComplete: z.boolean(),
   gripPercent: z.number().min(0).max(100).optional(),
   pressed: z.boolean().optional(),
   practiceStimulus: z.enum(['WAYANG', 'BATIK', 'CANDI', 'MONAS', 'ANGKLUNG']).optional(),

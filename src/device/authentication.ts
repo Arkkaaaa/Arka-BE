@@ -8,10 +8,10 @@ import {
 } from 'node:crypto';
 import type { Redis } from 'ioredis';
 import type { Env } from '../config/env.js';
-import type { DeviceHello, DeviceProve } from './protocol.js';
+import { DEVICE_SUBPROTOCOL, type DeviceHello, type DeviceProve } from './protocol.js';
 
 const CHALLENGE_TTL_SECONDS = 15;
-const CHALLENGE_PREFIX = 'jalin:device:challenge:';
+const CHALLENGE_PREFIX = 'arka:device:challenge:';
 
 export interface DeviceChallengeRecord {
   readonly challengeId: string;
@@ -56,8 +56,6 @@ export async function issueDeviceChallenge(
     expiresAtMs: nowMs + CHALLENGE_TTL_SECONDS * 1_000,
   };
   const stored = JSON.stringify({
-    deviceId: hello.deviceId,
-    institutionId: hello.institutionId,
     bootId: hello.bootId,
     nonce: record.nonce,
     expiresAtMs: record.expiresAtMs,
@@ -84,8 +82,6 @@ export async function verifyDeviceProof(
   const encoded = await redis.call('GETDEL', key);
   if (typeof encoded !== 'string') return false;
   let record: {
-    deviceId: string;
-    institutionId: string;
     bootId: string;
     nonce: string;
     expiresAtMs: number;
@@ -95,14 +91,8 @@ export async function verifyDeviceProof(
   } catch {
     return false;
   }
-  if (
-    record.expiresAtMs < nowMs ||
-    record.deviceId !== hello.deviceId ||
-    record.institutionId !== hello.institutionId ||
-    record.bootId !== hello.bootId
-  )
-    return false;
-  const material = `jalin-device-v1\n${prove.payload.challengeId}\n${record.nonce}\n${hello.deviceId}\n${hello.institutionId}\n${hello.bootId}`;
+  if (record.expiresAtMs < nowMs || record.bootId !== hello.bootId) return false;
+  const material = `${DEVICE_SUBPROTOCOL}\n${prove.payload.challengeId}\n${record.nonce}\n${hello.bootId}`;
   const expected = createHmac('sha256', secret).update(material).digest();
   let supplied: Buffer;
   try {

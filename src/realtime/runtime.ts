@@ -48,6 +48,7 @@ import {
   type SequenceMemoryState,
 } from '../game/sequence-memory.js';
 import type { RuntimeDependencies } from './types.js';
+import { MODE3_DEMO_DEVICE_KEY } from '../device/mode3-demo.js';
 import { RealtimeEventStore } from './events.js';
 
 const COUNTDOWN_MS = 3_000;
@@ -109,7 +110,8 @@ const GoNoGoRuleSchema = z
 const SequenceRuleSchema = z
   .object({
     initialSequenceLength: z.number().int().min(2),
-    maxCompletedLevels: z.number().int().positive(),
+    maxSequenceLength: z.number().int().min(2).max(6).optional(),
+    maxCompletedLevels: z.number().int().positive().optional(),
     initialLives: z.number().int().positive(),
     exampleItemMs: z.number().int().positive(),
     exampleGapMs: z.number().int().nonnegative(),
@@ -153,6 +155,7 @@ interface PreparationRuntime {
   readonly config: Record<string, unknown>;
   state: 'BINDING_SETUP' | 'CALIBRATING' | 'PRACTICING' | 'READY' | 'CANCELLED' | 'EXPIRED';
   setupBound: boolean;
+  checkedButton: ButtonCode | null;
   calibrationState: CalibrationWindowState | null;
   calibration: Record<string, unknown> | null;
   edge: FsrEdgeState;
@@ -191,7 +194,7 @@ export interface OpenPreparationInput {
   readonly requestId: string;
   readonly mode: Mode;
   readonly displayName: string;
-  readonly participantReference: string;
+  readonly participantReference?: string;
   readonly privacyAcknowledged: boolean;
 }
 export interface CreateRuntimeSessionInput {
@@ -412,7 +415,14 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     const rule = ruleVersions[0]!;
     const config = parseRule(input.mode, rule.config);
     const devices = await this.dependencies.prisma.device.findMany({
-      where: { institutionId: input.institutionId, inventoryStatus: 'ACTIVE', revokedAt: null },
+      where:
+        input.mode === 'SEQUENCE_MEMORY'
+          ? { deviceId: MODE3_DEMO_DEVICE_KEY, inventoryStatus: 'ACTIVE', revokedAt: null }
+          : {
+              institutionId: input.institutionId,
+              inventoryStatus: 'ACTIVE',
+              revokedAt: null,
+            },
       orderBy: { provisionedAt: 'asc' },
     });
     let selected: { device: (typeof devices)[number]; readiness: DeviceReadiness } | null = null;
@@ -437,10 +447,12 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     const reservationId = randomUUID();
     let preparation;
     try {
-      const participant = await this.dependencies.participantIdentity.ensureActiveParticipant(
-        input.institutionId,
-        { displayName: input.displayName, participantReference: input.participantReference },
-      );
+      const participant = input.participantReference
+        ? await this.dependencies.participantIdentity.ensureActiveParticipant(input.institutionId, {
+            displayName: input.displayName,
+            participantReference: input.participantReference,
+          })
+        : null;
       preparation = await this.dependencies.prisma.$transaction(async (tx) => {
         const created = await tx.gamePreparation.create({
           data: {
@@ -448,9 +460,9 @@ export class AuthoritativeRuntime implements RuntimeGateway {
             setupId,
             institutionId: input.institutionId,
             ownerSessionId: input.ownerSessionId,
-            participantId: participant.id,
+            participantId: participant?.id ?? null,
             displayNameSnapshot: input.displayName,
-            participantRefSnapshot: input.participantReference,
+            participantRefSnapshot: input.participantReference ?? null,
             mode: input.mode,
             deviceId: selectedDevice.device.deviceId,
             ruleVersionId: rule.id,
@@ -502,6 +514,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       config,
       state: 'BINDING_SETUP',
       setupBound: false,
+      checkedButton: null,
       calibrationState: input.mode === 'SEQUENCE_MEMORY' ? null : createCalibrationState(),
       calibration: null,
       edge: { pressed: false, armed: true },
@@ -798,7 +811,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     const runtime = await this.loadPreparation(setupId);
     if (!runtime || runtime.state !== 'BINDING_SETUP') return;
     runtime.setupBound = true;
-    runtime.state = runtime.mode === 'SEQUENCE_MEMORY' ? 'READY' : 'CALIBRATING';
+    runtime.state = runtime.mode === 'SEQUENCE_MEMORY' ? 'BINDING_SETUP' : 'CALIBRATING';
     const updated = await this.dependencies.prisma.gamePreparation.updateMany({
       where: { setupId, state: 'BINDING_SETUP' },
       data: { state: runtime.state, setupBoundAt: new Date() },
@@ -861,11 +874,17 @@ export class AuthoritativeRuntime implements RuntimeGateway {
   }
 
   async handleButton(
-    sessionId: string,
+    association: { setupId?: string; sessionId?: string },
     buttonCode: ButtonCode,
     input: TrustedDeviceInput,
   ): Promise<void> {
-    await this.handleSessionInput(sessionId, { kind: 'BUTTON', buttonCode }, input);
+    if (association.setupId) {
+      await this.handlePreparationButton(association.setupId, buttonCode, input);
+      return;
+    }
+    if (association.sessionId) {
+      await this.handleSessionInput(association.sessionId, { kind: 'BUTTON', buttonCode }, input);
+    }
   }
 
   async interruptDevice(deviceId: string, reason: string): Promise<void> {
@@ -943,6 +962,39 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     if (updated.count === 0) return;
     await this.saveSession(runtime);
     await this.publishSession(runtime, 'Permainan segera dimulai.');
+  }
+
+  private async handlePreparationButton(
+    setupId: string,
+    buttonCode: ButtonCode,
+    input: TrustedDeviceInput,
+  ): Promise<void> {
+    const runtime = await this.loadPreparation(setupId);
+    if (
+      !runtime ||
+      runtime.mode !== 'SEQUENCE_MEMORY' ||
+      !runtime.setupBound ||
+      runtime.state !== 'BINDING_SETUP'
+    ) {
+      return;
+    }
+    runtime.lastInput = input;
+    runtime.checkedButton = buttonCode;
+    if (buttonCode === 'RED') {
+      const updated = await this.dependencies.prisma.gamePreparation.updateMany({
+        where: {
+          setupId,
+          mode: 'SEQUENCE_MEMORY',
+          state: 'BINDING_SETUP',
+          setupBoundAt: { not: null },
+        },
+        data: { state: 'READY' },
+      });
+      if (updated.count === 0) return;
+      runtime.state = 'READY';
+    }
+    await this.savePreparation(runtime);
+    await this.publishPreparation(runtime);
   }
 
   private async handlePreparationFsr(
@@ -1203,7 +1255,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       runtime.engine = createSequenceMemory(
         {
           initialSequenceLength: rule.initialSequenceLength,
-          maxCompletedLevels: rule.maxCompletedLevels,
+          maxSequenceLength: rule.maxSequenceLength ?? 6,
           initialLives: rule.initialLives,
           exampleItemMs: rule.exampleItemMs,
           exampleGapMs: rule.exampleGapMs,
@@ -1784,7 +1836,11 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     const trial = runtime.practice[runtime.practiceIndex];
     const instruction =
       runtime.state === 'BINDING_SETUP'
-        ? 'Menghubungkan perangkat.'
+        ? runtime.mode === 'SEQUENCE_MEMORY' && runtime.setupBound
+          ? runtime.checkedButton && runtime.checkedButton !== 'RED'
+            ? 'Tombol belum sesuai. Tekan tombol merah.'
+            : 'Tekan tombol merah untuk memeriksa perangkat.'
+          : 'Menghubungkan perangkat.'
         : runtime.state === 'CALIBRATING'
           ? 'Ikuti petunjuk kalibrasi dengan nyaman.'
           : runtime.state === 'PRACTICING'
@@ -1802,6 +1858,8 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         state: runtime.state,
         instruction,
         setupBound: runtime.setupBound,
+        checkedButton: runtime.checkedButton,
+        buttonCheckComplete: runtime.mode === 'SEQUENCE_MEMORY' && runtime.checkedButton === 'RED',
         ...(runtime.calibration && typeof runtime.calibration['gripPercent'] === 'number'
           ? { gripPercent: runtime.calibration['gripPercent'] }
           : {}),

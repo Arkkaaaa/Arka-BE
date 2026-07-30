@@ -8,7 +8,7 @@ export type MemoryAttemptOutcome = 'SUCCESS' | 'WRONG' | 'TIMEOUT' | 'MULTI_BUTT
 
 export interface SequenceMemoryConfig {
   initialSequenceLength: number;
-  maxCompletedLevels: number;
+  maxSequenceLength: number;
   initialLives: number;
   exampleItemMs: number;
   exampleGapMs: number;
@@ -89,8 +89,8 @@ function normalizedConfig(config: SequenceMemoryConfig): Required<SequenceMemory
   if (
     !Number.isSafeInteger(value.initialSequenceLength) ||
     value.initialSequenceLength < 2 ||
-    !Number.isSafeInteger(value.maxCompletedLevels) ||
-    value.maxCompletedLevels <= 0 ||
+    !Number.isSafeInteger(value.maxSequenceLength) ||
+    value.maxSequenceLength < value.initialSequenceLength ||
     !Number.isSafeInteger(value.initialLives) ||
     value.initialLives <= 0 ||
     !Number.isSafeInteger(value.exampleItemMs) ||
@@ -390,7 +390,7 @@ export function inputSequenceMemory(
     pendingAction: 'NEXT_LEVEL',
     feedback: 'CORRECT',
   };
-  if (completedLevels >= next.config.maxCompletedLevels)
+  if (next.sequence.length >= next.config.maxSequenceLength)
     next = metricsCompletion(next, 'LEVEL_CAP_REACHED');
   return transition(next, true);
 }

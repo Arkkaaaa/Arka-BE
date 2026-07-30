@@ -26,6 +26,12 @@ import { ParticipantController } from '../modules/participant/participant.contro
 import { ParticipantRepository } from '../modules/participant/participant.repository.js';
 import { createParticipantRouter } from '../modules/participant/participant.routes.js';
 import { ParticipantService } from '../modules/participant/participant.service.js';
+import {
+  ProfileController,
+  ProfileRepository,
+  ProfileService,
+  createProfileRoutes,
+} from '../modules/profile/index.js';
 import type { RuntimeGateway } from '../realtime/index.js';
 import { writeAudit } from '../services/audit.js';
 
@@ -61,6 +67,9 @@ export function createApiRouter(dependencies: ApiRouterDependencies): Router {
       dependencies.env.BETTER_AUTH_SECRET,
     ),
   );
+  const profileController = new ProfileController(
+    new ProfileService(new ProfileRepository(dependencies.prisma)),
+  );
   const deviceRepository = new DeviceRepository(dependencies.prisma, dependencies.redis);
   const deviceController = new DeviceController(new DeviceService(deviceRepository));
   const dashboardController = new DashboardController(
@@ -76,6 +85,7 @@ export function createApiRouter(dependencies: ApiRouterDependencies): Router {
 
   router.use(createAuthRouter(authController));
   router.use(requireInstitution);
+  router.use(createProfileRoutes(profileController, activity));
   router.use(createParticipantRouter(participantController, activity));
   router.use(createDeviceRoutes(deviceController, activity));
   router.use(createGameRoutes(gameController, activity));

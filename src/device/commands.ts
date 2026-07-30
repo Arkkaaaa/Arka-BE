@@ -41,7 +41,6 @@ export async function enqueueDeviceCommand(db: CommandDb, input: EnqueueDeviceCo
 export function commandToWire(
   command: {
     commandId: string;
-    deviceId: string;
     reservationId: string | null;
     associationId: string | null;
     sessionId: string | null;
@@ -58,7 +57,6 @@ export function commandToWire(
     messageId: randomUUID(),
     sentAtMs,
     sequence: Number(command.sequence),
-    deviceId: command.deviceId,
   };
   if (command.kind === 'SETUP_BIND' || command.kind === 'SETUP_UNBIND') {
     if (!command.reservationId) throw new Error('Setup command reservation is missing');

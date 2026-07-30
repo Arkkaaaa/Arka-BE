@@ -79,10 +79,12 @@ export class GameService {
     context: GameRequestContext,
     request: CreatePreparationRequest,
   ): Promise<PreparationDto> {
-    const participantStatus = await this.repository.findParticipantStatus(
-      context.institutionId,
-      request.participantReference,
-    );
+    const participantStatus = request.participantReference
+      ? await this.repository.findParticipantStatus(
+          context.institutionId,
+          request.participantReference,
+        )
+      : null;
     if (participantStatus === 'INACTIVE') {
       throw new AppError(409, 'participant_inactive', 'Profil peserta tidak aktif.');
     }
@@ -92,7 +94,12 @@ export class GameService {
       ownerSessionId: context.ownerSessionId,
       userId: context.userId,
       requestId: context.requestId,
-      ...request,
+      mode: request.mode,
+      displayName: request.displayName,
+      privacyAcknowledged: request.privacyAcknowledged,
+      ...(request.participantReference === undefined
+        ? {}
+        : { participantReference: request.participantReference }),
     });
     await this.writeAudit(auditContext(context), {
       action: 'PREPARATION_OPENED',

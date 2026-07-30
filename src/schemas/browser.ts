@@ -62,13 +62,18 @@ export const ProfileImageUrlSchema = z
       !parsed.password
     );
   }, 'Foto profil harus berupa URL http atau https.');
+export const ProfileImageDataSchema = z
+  .string()
+  .max(48_000)
+  .regex(/^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/]+=*$/u, 'Format foto profil tidak didukung.');
+export const ProfileImageSchema = z.union([ProfileImageUrlSchema, ProfileImageDataSchema]);
 
 export const MeDtoSchema = z.object({
   user: z.object({
     id: z.string(),
     email: z.string().email(),
     name: z.string(),
-    image: ProfileImageUrlSchema.nullable(),
+    image: ProfileImageSchema.nullable(),
   }),
   institution: z.object({
     id: z.string(),
@@ -79,6 +84,14 @@ export const MeDtoSchema = z.object({
   csrfToken: z.string().min(32),
 });
 export type MeDto = z.infer<typeof MeDtoSchema>;
+export const UpdateProfileRequestSchema = z
+  .object({
+    name: DisplayNameSchema,
+    image: ProfileImageSchema.nullable(),
+    institutionName: InstitutionNameSchema,
+  })
+  .strict();
+export type UpdateProfileRequest = z.infer<typeof UpdateProfileRequestSchema>;
 
 export const ResolveParticipantRequestSchema = z.object({
   participantReference: ParticipantReferenceSchema,
@@ -128,6 +141,14 @@ export const DashboardActivityDtoSchema = z.object({
   savedSessionsTotal: z.number().int().nonnegative(),
   savedSessionsLast7Days: z.number().int().nonnegative(),
   latestSavedAt: IsoDateSchema.nullable(),
+  dailySavedSessions: z
+    .array(
+      z.object({
+        date: z.iso.date(),
+        savedSessions: z.number().int().nonnegative(),
+      }),
+    )
+    .length(7),
   modes: z.array(
     z.object({
       mode: GameModeSchema,
@@ -139,13 +160,51 @@ export const DashboardActivityDtoSchema = z.object({
   ).length(3),
 });
 export type DashboardActivityDto = z.infer<typeof DashboardActivityDtoSchema>;
-
-export const CreatePreparationRequestSchema = z.object({
-  mode: GameModeSchema,
-  displayName: DisplayNameSchema,
-  participantReference: ParticipantReferenceSchema,
-  privacyAcknowledged: z.boolean(),
+export const DashboardProgressDtoSchema = z.object({
+  generatedAt: IsoDateSchema,
+  participants: z.array(
+    z.object({
+      participantId: PublicIdSchema,
+      displayName: DisplayNameSchema,
+      savedSessionsTotal: z.number().int().nonnegative(),
+      sessionsLast7Days: z.number().int().nonnegative(),
+      activeWeeksLast4: z.number().int().min(0).max(4),
+      lastSession: z
+        .object({
+          mode: GameModeSchema,
+          completedAt: IsoDateSchema,
+        })
+        .nullable(),
+      progress: z.discriminatedUnion('status', [
+        z.object({ status: z.literal('NO_BASELINE'), scoreDelta: z.null() }),
+        z.object({
+          status: z.enum(['IMPROVED', 'MAINTAINED', 'LOWER']),
+          scoreDelta: z.number().int().min(-1000).max(1000),
+        }),
+      ]),
+      achievementStatus: z.enum([
+        'NOT_STARTED',
+        'FIRST_SESSION',
+        'IMPROVED',
+        'CONSISTENT',
+        'CONTINUING',
+      ]),
+    }),
+  ),
 });
+export type DashboardProgressDto = z.infer<typeof DashboardProgressDtoSchema>;
+
+export const CreatePreparationRequestSchema = z
+  .object({
+    mode: GameModeSchema,
+    displayName: DisplayNameSchema,
+    participantReference: ParticipantReferenceSchema.optional(),
+    privacyAcknowledged: z.boolean(),
+  })
+  .refine((value) => value.mode === 'SEQUENCE_MEMORY' || value.participantReference !== undefined, {
+    path: ['participantReference'],
+    message: 'Kode peserta fasilitas wajib untuk mode ini.',
+  });
 export const PreparationStateSchema = z.enum([
   'WAITING_DEVICE',
   'BINDING_SETUP',

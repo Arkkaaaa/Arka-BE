@@ -1,11 +1,34 @@
 import type { GameMode, PrismaClient } from '../../generated/prisma/client.js';
 import type { DeviceRepository, DeviceSnapshot } from '../device/device.repository.js';
 
+export interface DashboardProgressRecord {
+  readonly generatedAt: Date;
+  readonly participants: readonly {
+    readonly participantId: string;
+    readonly displayName: string;
+    readonly savedSessionsTotal: number;
+    readonly sessionsLast7Days: number;
+    readonly activeWeeksLast4: number;
+    readonly latest: {
+      readonly mode: GameMode;
+      readonly completedAt: Date;
+      readonly score: number;
+      readonly gameRuleVersion: string;
+      readonly sessionId: string;
+    } | null;
+    readonly previousComparableScore: number | null;
+  }[];
+}
+
 export interface DashboardActivityRecord {
   readonly activeParticipants: number;
   readonly savedSessionsTotal: number;
   readonly savedSessionsLast7Days: number;
   readonly latestSavedAt: Date | null;
+  readonly dailySavedSessions: readonly {
+    readonly date: string;
+    readonly savedSessions: number;
+  }[];
   readonly modes: readonly {
     readonly mode: GameMode;
     readonly savedSessions: number;
@@ -27,13 +50,88 @@ export class DashboardRepository {
     return this.devices.listInstitutionDevices(institutionId);
   }
 
-  async activity(institutionId: string): Promise<DashboardActivityRecord> {
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  async progress(institutionId: string, now = new Date()): Promise<DashboardProgressRecord> {
+    const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const twentyEightDaysAgo = new Date(now.getTime() - 28 * 24 * 60 * 60 * 1000);
+    const participants = await this.prisma.participant.findMany({
+      where: { institutionId, status: 'ACTIVE' },
+      orderBy: [{ normalizedName: 'asc' }, { participantId: 'asc' }],
+      select: { id: true, participantId: true, displayName: true },
+    });
+
+    return {
+      generatedAt: now,
+      participants: await Promise.all(
+        participants.map(async (participant) => {
+          const savedWhere = {
+            institutionId,
+            participantId: participant.id,
+            session: { institutionId, status: 'SAVED' as const },
+          };
+          const [savedSessionsTotal, sessionsLast7Days, recentResults, latest] = await Promise.all([
+            this.prisma.gameResult.count({ where: savedWhere }),
+            this.prisma.gameResult.count({
+              where: { ...savedWhere, completedAt: { gte: sevenDaysAgo, lte: now } },
+            }),
+            this.prisma.gameResult.findMany({
+              where: { ...savedWhere, completedAt: { gte: twentyEightDaysAgo, lte: now } },
+              select: { completedAt: true },
+            }),
+            this.prisma.gameResult.findFirst({
+              where: savedWhere,
+              orderBy: [{ completedAt: 'desc' }, { sessionId: 'desc' }],
+              select: {
+                mode: true,
+                completedAt: true,
+                score: true,
+                gameRuleVersion: true,
+                sessionId: true,
+              },
+            }),
+          ]);
+          const activeWeeks = new Set(
+            recentResults.map((result) =>
+              Math.min(3, Math.floor((now.getTime() - result.completedAt.getTime()) / (7 * 24 * 60 * 60 * 1000))),
+            ),
+          );
+          const previous = latest
+            ? await this.prisma.gameResult.findFirst({
+                where: {
+                  ...savedWhere,
+                  mode: latest.mode,
+                  gameRuleVersion: latest.gameRuleVersion,
+                  OR: [
+                    { completedAt: { lt: latest.completedAt } },
+                    { completedAt: latest.completedAt, sessionId: { lt: latest.sessionId } },
+                  ],
+                },
+                orderBy: [{ completedAt: 'desc' }, { sessionId: 'desc' }],
+                select: { score: true },
+              })
+            : null;
+          return {
+            participantId: participant.participantId,
+            displayName: participant.displayName,
+            savedSessionsTotal,
+            sessionsLast7Days,
+            activeWeeksLast4: activeWeeks.size,
+            latest,
+            previousComparableScore: previous?.score ?? null,
+          };
+        }),
+      ),
+    };
+  }
+
+  async activity(institutionId: string, now = new Date()): Promise<DashboardActivityRecord> {
+    const todayUtc = new Date(now);
+    todayUtc.setUTCHours(0, 0, 0, 0);
+    const seriesStart = new Date(todayUtc.getTime() - 6 * 24 * 60 * 60 * 1000);
     const savedWhere = { institutionId, session: { status: 'SAVED' as const, institutionId } };
     const [
       activeParticipants,
       savedSessionsTotal,
-      savedSessionsLast7Days,
+      recentResults,
       latest,
       totalsByMode,
       recentByMode,
@@ -41,8 +139,9 @@ export class DashboardRepository {
     ] = await Promise.all([
       this.prisma.participant.count({ where: { institutionId, status: 'ACTIVE' } }),
       this.prisma.gameResult.count({ where: savedWhere }),
-      this.prisma.gameResult.count({
-        where: { ...savedWhere, completedAt: { gte: sevenDaysAgo } },
+      this.prisma.gameResult.findMany({
+        where: { ...savedWhere, completedAt: { gte: seriesStart, lte: now } },
+        select: { completedAt: true },
       }),
       this.prisma.gameResult.findFirst({
         where: savedWhere,
@@ -57,7 +156,7 @@ export class DashboardRepository {
       }),
       this.prisma.gameResult.groupBy({
         by: ['mode'],
-        where: { ...savedWhere, completedAt: { gte: sevenDaysAgo } },
+        where: { ...savedWhere, completedAt: { gte: seriesStart, lte: now } },
         _count: { _all: true },
       }),
       Promise.all(
@@ -71,11 +170,24 @@ export class DashboardRepository {
       ),
     ]);
 
+    const sessionsByDate = new Map<string, number>();
+    for (const result of recentResults) {
+      const date = result.completedAt.toISOString().slice(0, 10);
+      sessionsByDate.set(date, (sessionsByDate.get(date) ?? 0) + 1);
+    }
+    const dailySavedSessions = Array.from({ length: 7 }, (_, index) => {
+      const date = new Date(seriesStart.getTime() + index * 24 * 60 * 60 * 1000)
+        .toISOString()
+        .slice(0, 10);
+      return { date, savedSessions: sessionsByDate.get(date) ?? 0 };
+    });
+
     return {
       activeParticipants,
       savedSessionsTotal,
-      savedSessionsLast7Days,
+      savedSessionsLast7Days: recentResults.length,
       latestSavedAt: latest?.completedAt ?? null,
+      dailySavedSessions,
       modes: MODES.map((mode) => {
         const total = totalsByMode.find((entry) => entry.mode === mode);
         const recent = recentByMode.find((entry) => entry.mode === mode);

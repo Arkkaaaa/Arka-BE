@@ -24,6 +24,7 @@ import { AuthRepository } from './modules/auth/auth.repository.js';
 import { SessionActivityService } from './modules/auth/auth.service.js';
 import { createRealtimeAttachment } from './realtime/index.js';
 import { createApiRouter } from './routes/api.js';
+import { createSwaggerRouter } from './routes/swagger.js';
 import { createAiSummaryWorker } from './workers/ai-summary.js';
 import { createOutboxWorker } from './workers/outbox.js';
 
@@ -74,6 +75,7 @@ app.use(
   }),
 );
 app.use(exactOriginGuard(env));
+app.use(createSwaggerRouter());
 
 app.get('/healthz', (_req, res) => res.status(200).json({ status: 'ok' }));
 app.get('/readyz', async (_req, res) => {

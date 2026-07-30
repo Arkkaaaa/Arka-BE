@@ -1,8 +1,8 @@
-# Jalin Backend
+# Arka Backend
 
-Jalin Backend adalah Express API dan session runtime untuk sistem latihan rehabilitasi Jalin. Backend mengatur autentikasi institusi, otorisasi, data peserta, inventory perangkat, lifecycle permainan, scoring, finalisasi hasil, audit, dan komunikasi realtime dengan browser serta ESP32.
+Arka Backend adalah Express API dan session runtime untuk sistem latihan rehabilitasi Arka. Backend mengatur autentikasi institusi, otorisasi, data peserta, inventory perangkat, lifecycle permainan, scoring, finalisasi hasil, audit, dan komunikasi realtime dengan browser serta ESP32.
 
-Jalin merekam sesi latihan; hasilnya bukan diagnosis atau rekomendasi terapi.
+Arka merekam sesi latihan; hasilnya bukan diagnosis atau rekomendasi terapi.
 
 ## Trusted Responsibilities
 
@@ -36,6 +36,9 @@ Jalin merekam sesi latihan; hasilnya bukan diagnosis atau rekomendasi terapi.
 | --- | --- | --- |
 | `/healthz` | Public | Liveness backend |
 | `/readyz` | Public | Koneksi PostgreSQL dan Redis |
+| `/docs` | Public | Swagger UI untuk API aplikasi dan autentikasi |
+| `/openapi.json` | Public | OpenAPI 3.1 untuk API aplikasi |
+| `/api/auth/open-api/generate-schema` | Public | OpenAPI yang dibuat langsung oleh Better Auth |
 | `/api/auth/*` | Public/session | Better Auth |
 | `/api/v1/me` | Authenticated | Institusi dan sesi aktif |
 | `/api/v1/auth/*` | Authenticated | Capability dan onboarding |

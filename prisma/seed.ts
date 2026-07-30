@@ -55,7 +55,7 @@ const rules = [
     version: VERSION,
     config: {
       initialSequenceLength: 2,
-      maxCompletedLevels: 6,
+      maxSequenceLength: 6,
       initialLives: 2,
       exampleItemMs: 700,
       exampleGapMs: 500,

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 export const DEVICE_PROTOCOL_VERSION = 1 as const;
+export const DEVICE_SUBPROTOCOL = 'arka-device-v1' as const;
 export const DEVICE_MAX_MESSAGE_BYTES = 16 * 1024;
 export const DEVICE_MAX_MESSAGES_PER_SECOND = 25;
 export const DEVICE_MAX_SEQUENCE_GAP = 32;
@@ -8,11 +9,6 @@ export const DEVICE_HEARTBEAT_INTERVAL_MS = 5_000;
 export const DEVICE_STALE_AFTER_MS = 15_000;
 
 const Uuid = z.string().uuid();
-const DeviceId = z
-  .string()
-  .min(1)
-  .max(80)
-  .regex(/^[A-Za-z0-9._:-]+$/);
 const Sequence = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const SentAt = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
 const MessageId = Uuid;
@@ -44,14 +40,12 @@ const ClientBase = z
     messageId: MessageId,
     sentAtMs: SentAt,
     sequence: Sequence,
-    deviceId: DeviceId,
   })
   .strict();
 
 export const DeviceHelloSchema = ClientBase.extend({
   type: z.literal('device.hello'),
   sequence: z.literal(0),
-  institutionId: Uuid,
   bootId: Uuid,
   payload: z
     .object({
@@ -69,7 +63,6 @@ export const DeviceChallengeSchema = z
     messageId: MessageId,
     sequence: z.literal(0),
     sentAtMs: SentAt,
-    deviceId: DeviceId,
     payload: z
       .object({
         challengeId: Uuid,
@@ -100,7 +93,6 @@ export const DeviceAcceptSchema = z
     messageId: MessageId,
     sequence: z.literal(0),
     sentAtMs: SentAt,
-    deviceId: DeviceId,
     payload: z
       .object({
         connectionId: Uuid,
@@ -138,7 +130,6 @@ const AuthenticatedBase = z
     messageId: MessageId,
     sentAtMs: SentAt,
     sequence: Sequence.refine((value) => value >= 1, 'Authenticated sequence starts at one'),
-    deviceId: DeviceId,
   })
   .strict();
 
@@ -211,7 +202,6 @@ const ServerCommandBase = z
     messageId: MessageId,
     sentAtMs: SentAt,
     sequence: Sequence.refine((value) => value >= 1),
-    deviceId: DeviceId,
   })
   .strict();
 const CommandIdentity = { commandId: Uuid, reservationId: Uuid } as const;
@@ -294,7 +284,6 @@ export function parseDeviceMessage(
 }
 
 const FIXTURE_ID = '018f2f6e-7b23-7f6b-9238-0242ac120002';
-const FIXTURE_INSTITUTION = '018f2f6e-7b23-7f6b-9238-0242ac120003';
 const FIXTURE_BOOT = '018f2f6e-7b23-7f6b-9238-0242ac120004';
 export const DEVICE_PROTOCOL_FIXTURES = Object.freeze({
   hello: {
@@ -303,8 +292,6 @@ export const DEVICE_PROTOCOL_FIXTURES = Object.freeze({
     messageId: FIXTURE_ID,
     sentAtMs: 1_721_000_000_000,
     sequence: 0,
-    deviceId: 'jalin-demo-001',
-    institutionId: FIXTURE_INSTITUTION,
     bootId: FIXTURE_BOOT,
     payload: { firmwareVersion: '0.1.0', capabilities: ['FSR_10HZ', 'BUTTONS_4', 'LED'] },
   },
@@ -314,7 +301,6 @@ export const DEVICE_PROTOCOL_FIXTURES = Object.freeze({
     messageId: FIXTURE_ID,
     sentAtMs: 1_721_000_000_100,
     sequence: 1,
-    deviceId: 'jalin-demo-001',
     setupId: FIXTURE_BOOT,
     payload: { fsrRaw: 1024 },
   },
@@ -324,7 +310,6 @@ export const DEVICE_PROTOCOL_FIXTURES = Object.freeze({
     messageId: FIXTURE_ID,
     sentAtMs: 1_721_000_000_200,
     sequence: 2,
-    deviceId: 'jalin-demo-001',
     sessionId: FIXTURE_BOOT,
     payload: { buttonCode: 'RED' },
   },

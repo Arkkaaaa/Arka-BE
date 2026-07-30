@@ -73,7 +73,7 @@ export type DeviceReadiness = z.infer<typeof DeviceReadinessSchema>;
 export const DEVICE_READINESS_TTL_SECONDS = 20;
 
 export function readinessRedisKey(deviceId: string): string {
-  return `jalin:device:readiness:${deviceId}`;
+  return `arka:device:readiness:${deviceId}`;
 }
 
 export async function writeDeviceReadiness(

@@ -14,6 +14,7 @@ import {
 import {
   DEVICE_MAX_MESSAGE_BYTES,
   DEVICE_STALE_AFTER_MS,
+  DEVICE_SUBPROTOCOL,
   DeviceAcceptSchema,
   DeviceChallengeSchema,
   DeviceHelloSchema,
@@ -33,6 +34,7 @@ import {
 import { enforceDeviceSequence } from '../device/sequence.js';
 import type { AuthoritativeRuntime } from './runtime.js';
 import type { RealtimeDependencies } from './types.js';
+import { MODE3_DEMO_DEVICE_KEY } from '../device/mode3-demo.js';
 
 const DEVICE_CONNECTION_TTL_SECONDS = 20;
 const DEVICE_COMMAND_POLL_MS = 100;
@@ -63,6 +65,7 @@ return 0
 interface AuthenticatedConnection {
   readonly socket: WebSocket;
   readonly hello: DeviceHello;
+  readonly deviceKey: string;
   readonly connectionId: string;
   readonly firmwareCompatible: boolean;
   lastHealthAtMs: number;
@@ -82,7 +85,7 @@ function rejectedReason(result: PromiseRejectedResult): unknown {
 }
 
 function connectionKey(deviceId: string): string {
-  return `jalin:device:connection:${deviceId}`;
+  return `arka:device:connection:${deviceId}`;
 }
 
 function rawDataBuffer(data: RawData): Buffer {
@@ -164,6 +167,7 @@ export class DeviceRealtimeGateway {
     noServer: true,
     maxPayload: DEVICE_MAX_MESSAGE_BYTES,
     perMessageDeflate: false,
+    handleProtocols: (protocols) => protocols.has(DEVICE_SUBPROTOCOL) ? DEVICE_SUBPROTOCOL : false,
   });
   readonly #connections = new Set<DeviceSocketConnection>();
   readonly #pendingCleanups = new Set<Promise<void>>();
@@ -224,17 +228,17 @@ export class DeviceRealtimeGateway {
         .eval(
           RELEASE_CONNECTION_SCRIPT,
           1,
-          connectionKey(authenticatedConnection.hello.deviceId),
+          connectionKey(authenticatedConnection.deviceKey),
           authenticatedConnection.connectionId,
         )
         .then(async (released) => {
           if (Number(released) !== 1) return;
           await writeDeviceReadiness(
             this.dependencies.redis,
-            authenticatedConnection.hello.deviceId,
+            authenticatedConnection.deviceKey,
             offlineReadiness(),
           );
-          await this.runtime.interruptDevice(authenticatedConnection.hello.deviceId, reason);
+          await this.runtime.interruptDevice(authenticatedConnection.deviceKey, reason);
         });
       return this.#trackCleanup(authenticatedCleanupPromise);
     };
@@ -271,7 +275,7 @@ export class DeviceRealtimeGateway {
     const cleanupAfterDisconnect = (): void => {
       void cleanup('DEVICE_DISCONNECTED').catch((error) => {
         this.dependencies.logger.warn(
-          { err: error, deviceId: connection?.hello.deviceId },
+          { err: error, deviceId: connection?.deviceKey },
           'Pemutusan perangkat gagal ditangani',
         );
       });
@@ -324,8 +328,7 @@ export class DeviceRealtimeGateway {
             }
             const stored = await this.dependencies.prisma.device.findFirst({
               where: {
-                deviceId: parsedHello.data.deviceId,
-                institutionId: parsedHello.data.institutionId,
+                deviceId: MODE3_DEMO_DEVICE_KEY,
                 inventoryStatus: 'ACTIVE',
                 revokedAt: null,
               },
@@ -346,7 +349,6 @@ export class DeviceRealtimeGateway {
                 messageId: randomUUID(),
                 sentAtMs: Date.now(),
                 sequence: 0,
-                deviceId: hello.deviceId,
                 payload: challenge,
               }),
             );
@@ -355,7 +357,7 @@ export class DeviceRealtimeGateway {
 
           if (!connection) {
             const prove = DeviceProveSchema.safeParse(message);
-            if (!prove.success || prove.data.deviceId !== hello.deviceId || !device) {
+            if (!prove.success || !device) {
               closeProtocol(socket, 'Bukti perangkat ditolak');
               return;
             }
@@ -370,7 +372,7 @@ export class DeviceRealtimeGateway {
             }
             const connectionId = randomUUID();
             const acquired = await this.dependencies.redis.set(
-              connectionKey(hello.deviceId),
+              connectionKey(MODE3_DEMO_DEVICE_KEY),
               connectionId,
               'EX',
               DEVICE_CONNECTION_TTL_SECONDS,
@@ -381,7 +383,7 @@ export class DeviceRealtimeGateway {
               return;
             }
             await this.dependencies.prisma.device.update({
-              where: { deviceId: hello.deviceId },
+              where: { deviceId: MODE3_DEMO_DEVICE_KEY },
               data: {
                 lastAuthenticatedAt: new Date(),
                 firmwareVersion: hello.payload.firmwareVersion,
@@ -392,6 +394,7 @@ export class DeviceRealtimeGateway {
             connection = {
               socket,
               hello,
+              deviceKey: MODE3_DEMO_DEVICE_KEY,
               connectionId,
               firmwareCompatible: isDeviceFirmwareCompatible(hello.payload.firmwareVersion),
               lastHealthAtMs: now,
@@ -401,7 +404,7 @@ export class DeviceRealtimeGateway {
                 if (connection)
                   void dispatchCommands(connection).catch((error) => {
                     this.dependencies.logger.warn(
-                      { err: error, deviceId: connection?.hello.deviceId },
+                      { err: error, deviceId: connection?.deviceKey },
                       'Pengiriman perintah perangkat gagal',
                     );
                   });
@@ -416,7 +419,7 @@ export class DeviceRealtimeGateway {
             };
             connection.commandTimer.unref();
             connection.staleTimer.unref();
-            await writeDeviceReadiness(this.dependencies.redis, hello.deviceId, {
+            await writeDeviceReadiness(this.dependencies.redis, connection.deviceKey, {
               connectionStatus: connection.firmwareCompatible ? 'ONLINE' : 'CONNECTING',
               readinessCode: connection.firmwareCompatible
                 ? 'NOT_READY_BATTERY_UNKNOWN'
@@ -436,7 +439,6 @@ export class DeviceRealtimeGateway {
                 messageId: randomUUID(),
                 sentAtMs: now,
                 sequence: 0,
-                deviceId: hello.deviceId,
                 payload: { connectionId, heartbeatIntervalMs: 5_000, maxSequenceGap: 32 },
               }),
             );
@@ -444,18 +446,15 @@ export class DeviceRealtimeGateway {
             return;
           }
 
-          if (
-            message.deviceId !== connection.hello.deviceId ||
-            message.type === 'device.hello' ||
-            message.type === 'device.prove'
-          ) {
-            await closeAuthenticated('DEVICE_IDENTITY_MISMATCH');
-            closeProtocol(socket, 'Identitas perangkat berubah');
+          if (message.type === 'device.hello' || message.type === 'device.prove') {
+            await closeAuthenticated('UNEXPECTED_HANDSHAKE_MESSAGE');
+            closeProtocol(socket, 'Pesan handshake tidak diharapkan');
             return;
           }
           const authenticated = message;
           const decision = await enforceDeviceSequence(
             this.dependencies.redis,
+            connection.deviceKey,
             connection.hello.bootId,
             authenticated,
           );
@@ -472,7 +471,7 @@ export class DeviceRealtimeGateway {
           const renewed = await this.dependencies.redis.eval(
             REFRESH_CONNECTION_SCRIPT,
             1,
-            connectionKey(connection.hello.deviceId),
+            connectionKey(connection.deviceKey),
             connection.connectionId,
             String(DEVICE_CONNECTION_TTL_SECONDS),
           );
@@ -495,7 +494,7 @@ export class DeviceRealtimeGateway {
             'setupId' in authenticated
               ? { setupId: authenticated.setupId }
               : { sessionId: authenticated.sessionId };
-          if (!(await this.associationAllowed(connection.hello.deviceId, association))) {
+          if (!(await this.associationAllowed(connection.deviceKey, association))) {
             await this.runtime.interruptAssociation(association, 'INVALID_DEVICE_ASSOCIATION');
             await closeAuthenticated('INVALID_DEVICE_ASSOCIATION');
             closeProtocol(socket, 'Asosiasi perangkat ditolak');
@@ -511,19 +510,17 @@ export class DeviceRealtimeGateway {
           };
           if (authenticated.type === 'telemetry.fsr') {
             await this.runtime.handleFsr(association, authenticated.payload.fsrRaw, trustedInput);
-          } else if ('sessionId' in authenticated) {
+          } else {
             await this.runtime.handleButton(
-              authenticated.sessionId,
+              association,
               authenticated.payload.buttonCode,
               trustedInput,
             );
-          } else {
-            await this.runtime.interruptAssociation(association, 'INPUT_MODE_MISMATCH');
           }
         })
         .catch((error) => {
           this.dependencies.logger.warn(
-            { err: error, deviceId: hello?.deviceId },
+            { err: error, deviceKey: connection?.deviceKey },
             'Pesan perangkat gagal diproses',
           );
           void closeAuthenticated('DEVICE_PROCESSING_ERROR').finally(() => socket.terminate());
@@ -540,7 +537,7 @@ export class DeviceRealtimeGateway {
         where: {
           setupId: association.setupId,
           deviceId,
-          state: { in: ['CALIBRATING', 'PRACTICING', 'READY'] },
+          state: { in: ['BINDING_SETUP', 'CALIBRATING', 'PRACTICING', 'READY'] },
           reservation: { holderType: 'PREPARATION', state: 'HELD' },
         },
         select: { setupBoundAt: true },
@@ -565,7 +562,7 @@ export class DeviceRealtimeGateway {
     health: DeviceHealthPayload,
   ): Promise<void> {
     const reservation = await this.dependencies.prisma.deviceReservation.findUnique({
-      where: { deviceId: connection.hello.deviceId },
+      where: { deviceId: connection.deviceKey },
       select: { state: true },
     });
     const batteryPercent = health.battery.valid ? (health.battery.percent ?? null) : null;
@@ -574,7 +571,7 @@ export class DeviceRealtimeGateway {
       reservation?.state ?? null,
       connection.firmwareCompatible,
     );
-    await writeDeviceReadiness(this.dependencies.redis, connection.hello.deviceId, {
+    await writeDeviceReadiness(this.dependencies.redis, connection.deviceKey, {
       connectionStatus: connection.firmwareCompatible ? 'ONLINE' : 'CONNECTING',
       readinessCode: decision.readinessCode,
       firmwareVersion: connection.hello.payload.firmwareVersion,
@@ -585,7 +582,7 @@ export class DeviceRealtimeGateway {
       bootId: connection.hello.bootId,
     });
     if (decision.interruptionReason !== null) {
-      await this.runtime.interruptDevice(connection.hello.deviceId, decision.interruptionReason);
+      await this.runtime.interruptDevice(connection.deviceKey, decision.interruptionReason);
     }
   }
 
@@ -597,7 +594,7 @@ export class DeviceRealtimeGateway {
     const command = await this.dependencies.prisma.deviceCommand.findFirst({
       where: {
         commandId: message.payload.commandId,
-        deviceId: connection.hello.deviceId,
+        deviceId: connection.deviceKey,
         associationId,
       },
     });
@@ -648,7 +645,7 @@ export class DeviceRealtimeGateway {
     } else if (command.kind === 'SESSION_UNBIND') {
       await this.dependencies.prisma.deviceReservation.deleteMany({
         where: {
-          deviceId: connection.hello.deviceId,
+          deviceId: connection.deviceKey,
           state: 'RELEASING',
           releaseCommandId: command.commandId,
         },
@@ -669,7 +666,7 @@ export class DeviceRealtimeGateway {
       await expireCommands(this.dependencies.prisma);
       const commands = await this.dependencies.prisma.deviceCommand.findMany({
         where: {
-          deviceId: connection.hello.deviceId,
+          deviceId: connection.deviceKey,
           kind: { in: [...COMMAND_KINDS] },
           status: { in: ['PENDING', 'SENT'] },
           expiresAt: { gt: new Date() },
@@ -678,7 +675,7 @@ export class DeviceRealtimeGateway {
         take: 32,
       });
       const reservation = await this.dependencies.prisma.deviceReservation.findUnique({
-        where: { deviceId: connection.hello.deviceId },
+        where: { deviceId: connection.deviceKey },
         select: { reservationId: true },
       });
       for (const command of commands) {
@@ -696,7 +693,6 @@ export class DeviceRealtimeGateway {
         try {
           wire = commandToWire({
             commandId: command.commandId,
-            deviceId: command.deviceId,
             reservationId: command.reservationId,
             associationId: command.associationId,
             sessionId: command.sessionId,
