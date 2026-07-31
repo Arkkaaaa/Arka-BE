@@ -76,6 +76,7 @@ export interface SequenceMemoryTransition {
   readonly visual: {
     phase: 'EXAMPLE' | 'RESPONSE' | 'FEEDBACK';
     activeItem: MemoryButton | null;
+    activeIndex: number | null;
     sequenceLength: number;
     responseIndex: number;
     lives: number;
@@ -190,13 +191,25 @@ export function createSequenceMemory(
   };
 }
 
-function activeExampleItem(state: SequenceMemoryState): MemoryButton | null {
+export function activeSequenceCue(
+  state: SequenceMemoryState,
+): { readonly item: MemoryButton; readonly index: number; readonly endsAtMs: number } | null {
   if (state.phase !== 'EXAMPLE' || state.lifecycle !== 'PLAYING') return null;
   const offset = state.lastNowMs - state.phaseStartedAtMs;
   const stride = state.config.exampleItemMs + state.config.exampleGapMs;
   const index = Math.floor(offset / stride);
   if (index >= state.sequence.length || offset % stride >= state.config.exampleItemMs) return null;
-  return state.sequence[index] ?? null;
+  const item = state.sequence[index];
+  if (!item) return null;
+  return {
+    item,
+    index,
+    endsAtMs: state.phaseStartedAtMs + index * stride + state.config.exampleItemMs,
+  };
+}
+
+function activeExampleItem(state: SequenceMemoryState): MemoryButton | null {
+  return activeSequenceCue(state)?.item ?? null;
 }
 
 function metricsCompletion(
@@ -347,6 +360,7 @@ function transition(state: SequenceMemoryState, acceptedInput: boolean): Sequenc
     visual: {
       phase: state.phase,
       activeItem: activeExampleItem(state),
+      activeIndex: activeSequenceCue(state)?.index ?? null,
       sequenceLength: state.sequence.length,
       responseIndex: state.responseIndex,
       lives: state.lives,
@@ -363,16 +377,17 @@ export function inputSequenceMemory(
 ): SequenceMemoryTransition {
   let next = advance(state, nowMs);
   if (next.lifecycle !== 'PLAYING' || next.phase !== 'RESPONSE') return transition(next, false);
-  if (input === 'MULTIPLE') return transition(failAttempt(next, 'MULTI_BUTTON', nowMs), true);
-
   const firstResponseAtMs = next.firstResponseAtMs ?? nowMs;
+  next = { ...next, firstResponseAtMs };
+  if (input === 'MULTIPLE') return transition(failAttempt(next, 'MULTI_BUTTON', nowMs), true);
+  if (input !== next.sequence[next.responseIndex])
+    return transition(failAttempt(next, 'WRONG', nowMs), true);
+
   const interButtonMs =
     next.lastResponseAtMs === null
       ? next.interButtonMs
       : [...next.interButtonMs, nowMs - next.lastResponseAtMs];
-  next = { ...next, firstResponseAtMs, lastResponseAtMs: nowMs, interButtonMs };
-  if (input !== next.sequence[next.responseIndex])
-    return transition(failAttempt(next, 'WRONG', nowMs), true);
+  next = { ...next, lastResponseAtMs: nowMs, interButtonMs };
 
   const responseIndex = next.responseIndex + 1;
   if (responseIndex < next.sequence.length)

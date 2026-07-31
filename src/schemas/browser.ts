@@ -106,6 +106,11 @@ export const ParticipantDtoSchema = z.object({
   updatedAt: IsoDateSchema,
 });
 export type ParticipantDto = z.infer<typeof ParticipantDtoSchema>;
+export const ParticipantSearchQuerySchema = z.object({
+  query: z.string().trim().max(100).default(''),
+});
+export const ParticipantSearchResponseSchema = z.array(ParticipantDtoSchema).max(20);
+export const CreateParticipantRequestSchema = z.object({ displayName: DisplayNameSchema });
 export const UpdateParticipantRequestSchema = z
   .object({
     displayName: DisplayNameSchema.optional(),

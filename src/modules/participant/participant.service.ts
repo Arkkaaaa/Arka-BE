@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import {
   HistoryPageDtoSchema,
   LeaderboardDtoSchema,
@@ -82,6 +82,39 @@ export class ParticipantService {
     if (!participant) throw new AppError(404, 'participant_not_found', 'Peserta tidak ditemukan.');
     await this.repository.recordResolved(scope, participant.participantId);
     return ResolveParticipantResponseSchema.parse(participant);
+  }
+
+  public async searchParticipants(
+    institutionId: string,
+    query: string,
+  ): Promise<ParticipantDto[]> {
+    const participants = await this.repository.searchActive(
+      institutionId,
+      normalizeDisplayName(query),
+      query.trim(),
+      20,
+    );
+    return participants.map(participantDto);
+  }
+
+  public async createParticipant(
+    scope: ParticipantScope,
+    displayName: string,
+  ): Promise<ParticipantDto> {
+    const normalizedName = normalizeDisplayName(displayName);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const participant = await this.repository.createWithAudit(scope, {
+          displayName,
+          normalizedName,
+          participantReference: `AUTO-${randomBytes(9).toString('base64url')}`,
+        });
+        return participantDto(participant);
+      } catch (error) {
+        if (!isUniqueConstraintError(error) || attempt === 2) throw error;
+      }
+    }
+    throw new AppError(500, 'participant_creation_failed', 'Peserta belum dapat dibuat.');
   }
 
   public async getParticipant(

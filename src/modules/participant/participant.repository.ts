@@ -101,6 +101,57 @@ export class ParticipantRepository {
     });
   }
 
+  public searchActive(
+    institutionId: string,
+    normalizedQuery: string,
+    rawQuery: string,
+    take: number,
+  ): Promise<ParticipantRecord[]> {
+    return this.prisma.participant.findMany({
+      where: {
+        institutionId,
+        status: 'ACTIVE',
+        ...(normalizedQuery
+          ? {
+              OR: [
+                { normalizedName: { contains: normalizedQuery } },
+                { participantReference: { contains: rawQuery, mode: 'insensitive' } },
+              ],
+            }
+          : {}),
+      },
+      orderBy: [{ normalizedName: 'asc' }, { participantId: 'asc' }],
+      take,
+    });
+  }
+
+  public createWithAudit(
+    context: AuditContext & { readonly institutionId: string },
+    input: {
+      readonly displayName: string;
+      readonly normalizedName: string;
+      readonly participantReference: string;
+    },
+  ): Promise<ParticipantRecord> {
+    return this.prisma.$transaction(async (transaction) => {
+      const participant = await transaction.participant.create({
+        data: {
+          institutionId: context.institutionId,
+          participantId: publicHandle(),
+          participantReference: input.participantReference,
+          displayName: input.displayName,
+          normalizedName: input.normalizedName,
+        },
+      });
+      await writeAudit(transaction, context, {
+        action: 'PARTICIPANT_CREATED',
+        targetType: 'Participant',
+        targetId: participant.participantId,
+      });
+      return participant;
+    });
+  }
+
   public updateWithAudit(
     context: AuditContext & { readonly institutionId: string },
     participantHandle: string,

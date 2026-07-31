@@ -1,6 +1,8 @@
 import {
+  CreateParticipantRequestSchema,
   HistoryQuerySchema,
   LeaderboardQuerySchema,
+  ParticipantSearchQuerySchema,
   ResolveParticipantRequestSchema,
   UpdateParticipantRequestSchema,
 } from '../../schemas/index.js';
@@ -26,6 +28,20 @@ function participantScope(req: Request): ParticipantScope {
 
 export class ParticipantController {
   public constructor(private readonly service: ParticipantService) {}
+
+  public readonly search: RequestHandler = async (req, res) => {
+    const query = ParticipantSearchQuerySchema.parse(req.query);
+    res.json(
+      await this.service.searchParticipants(authContext(req).institutionId, query.query),
+    );
+  };
+
+  public readonly create: RequestHandler = async (req, res) => {
+    const body = CreateParticipantRequestSchema.parse(req.body);
+    res.status(201).json(
+      await this.service.createParticipant(participantScope(req), body.displayName),
+    );
+  };
 
   public readonly resolve: RequestHandler = async (req, res) => {
     const body = ResolveParticipantRequestSchema.parse(req.body);

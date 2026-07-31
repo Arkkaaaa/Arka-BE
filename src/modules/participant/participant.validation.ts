@@ -1,6 +1,8 @@
 import {
+  CreateParticipantRequestSchema,
   HistoryQuerySchema,
   LeaderboardQuerySchema,
+  ParticipantSearchQuerySchema,
   ResolveParticipantRequestSchema,
   UpdateParticipantRequestSchema,
 } from '../../schemas/index.js';
@@ -15,8 +17,10 @@ export const ParticipantParamsSchema = z.object({
 });
 
 export {
+  CreateParticipantRequestSchema,
   HistoryQuerySchema,
   LeaderboardQuerySchema,
+  ParticipantSearchQuerySchema,
   ResolveParticipantRequestSchema,
   UpdateParticipantRequestSchema,
 };

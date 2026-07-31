@@ -54,6 +54,7 @@ import {
   type GoNoGoState,
 } from '../game/go-no-go.js';
 import {
+  activeSequenceCue,
   createSequenceMemory,
   inputSequenceMemory,
   pauseSequenceMemory,
@@ -196,6 +197,7 @@ interface SessionRuntime {
   companionEverPresent: boolean;
   companionGraceEndsAtMs: number | null;
   countdownEndsAtMs: number | null;
+  lastSequenceCueKey?: string | null;
   engine: EngineState | null;
   edge: FsrEdgeState;
   lastInput: TrustedDeviceInput | null;
@@ -683,6 +685,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       companionEverPresent: false,
       companionGraceEndsAtMs: null,
       countdownEndsAtMs: null,
+      lastSequenceCueKey: null,
       engine: null,
       edge: { pressed: false, armed: true },
       lastInput: null,
@@ -1187,6 +1190,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
               ? tickGoNoGo(runtime.engine, now)
               : tickSequenceMemory(runtime.engine, now);
         runtime.engine = transition.state;
+        await this.syncSequenceCue(runtime);
         await this.saveSession(runtime);
         await this.publishSession(runtime, 'Permainan berlangsung.');
         if (transition.completed)
@@ -1198,6 +1202,24 @@ export class AuthoritativeRuntime implements RuntimeGateway {
           );
       }
     }
+  }
+
+  private async syncSequenceCue(runtime: SessionRuntime): Promise<void> {
+    if (runtime.engine?.mode !== 'SEQUENCE_MEMORY') return;
+    const cue = activeSequenceCue(runtime.engine);
+    if (!cue) return;
+    const cueKey = `${runtime.engine.phaseStartedAtMs}:${cue.index}`;
+    if (runtime.lastSequenceCueKey === cueKey) return;
+    runtime.lastSequenceCueKey = cueKey;
+    const remainingMs = Math.max(1, Math.min(1_000, cue.endsAtMs - Date.now()));
+    await enqueueMode3Command(this.dependencies.redis, {
+      lockId: runtime.lockId,
+      associationId: runtime.sessionId,
+      sessionId: runtime.sessionId,
+      kind: 'FEEDBACK',
+      payload: { action: `LED_${cue.item}`, expiresAfterMs: remainingMs },
+      expiresAt: new Date(cue.endsAtMs),
+    });
   }
 
   private async startPlaying(
@@ -1264,6 +1286,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     }
     runtime.status = 'PLAYING';
     runtime.countdownEndsAtMs = null;
+    await this.syncSequenceCue(runtime);
     await this.saveSession(runtime);
     await this.publishSession(runtime, 'Permainan dimulai.');
   }

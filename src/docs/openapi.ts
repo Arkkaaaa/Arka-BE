@@ -225,6 +225,43 @@ export const arkaOpenApi = {
         },
       },
     },
+    '/api/v1/participants': {
+      get: {
+        tags: ['Participants'],
+        summary: 'Search active participants',
+        operationId: 'searchParticipants',
+        security,
+        parameters: [
+          {
+            in: 'query',
+            name: 'query',
+            required: false,
+            schema: { type: 'string', maxLength: 100, default: '' },
+          },
+        ],
+        responses: {
+          '200': success('Matching active participants.', {
+            type: 'array',
+            maxItems: 20,
+            items: ref('Participant'),
+          }),
+          ...institutionErrors,
+        },
+      },
+      post: {
+        tags: ['Participants'],
+        summary: 'Create a participant with a generated reference',
+        operationId: 'createParticipant',
+        security,
+        parameters: mutationParameters,
+        requestBody: body(ref('CreateParticipantRequest'), { displayName: 'Andrian' }),
+        responses: {
+          '201': success('Participant created.', ref('Participant')),
+          ...institutionErrors,
+          '409': responseRef('Conflict'),
+        },
+      },
+    },
     '/api/v1/participants/resolve': {
       post: {
         tags: ['Participants'],
@@ -715,6 +752,12 @@ export const arkaOpenApi = {
           },
           csrfToken: { type: 'string', minLength: 32 },
         },
+      },
+      CreateParticipantRequest: {
+        type: 'object',
+        required: ['displayName'],
+        additionalProperties: false,
+        properties: { displayName: ref('DisplayName') },
       },
       ResolveParticipantRequest: {
         type: 'object',
@@ -1339,6 +1382,7 @@ export const arkaOpenApi = {
           'mode',
           'phase',
           'activeItem',
+          'activeIndex',
           'sequenceLength',
           'responseIndex',
           'lives',
@@ -1351,6 +1395,7 @@ export const arkaOpenApi = {
             type: ['string', 'null'],
             enum: ['RED', 'GREEN', 'BLUE', 'YELLOW', null],
           },
+          activeIndex: { type: ['integer', 'null'], minimum: 0, maximum: 5 },
           sequenceLength: { type: 'integer', minimum: 1 },
           responseIndex: { type: 'integer', minimum: 0 },
           lives: { type: 'integer', minimum: 0, maximum: 2 },
@@ -1736,6 +1781,10 @@ export const arkaOpenApi = {
                       'HAPTIC_SUCCESS',
                       'LED_CORRECT',
                       'LED_INCORRECT',
+                      'LED_YELLOW',
+                      'LED_GREEN',
+                      'LED_RED',
+                      'LED_BLUE',
                       'HAPTIC_PULSE',
                       'HARD_STOP',
                     ],

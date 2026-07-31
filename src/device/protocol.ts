@@ -28,6 +28,10 @@ export const DeviceFeedbackActionSchema = z.enum([
   'HAPTIC_SUCCESS',
   'LED_CORRECT',
   'LED_INCORRECT',
+  'LED_YELLOW',
+  'LED_GREEN',
+  'LED_RED',
+  'LED_BLUE',
   'HAPTIC_PULSE',
   'HARD_STOP',
 ]);

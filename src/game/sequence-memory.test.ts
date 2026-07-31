@@ -30,6 +30,8 @@ test('completes after the six-color sequence without generating a seventh color'
     0,
   );
 
+  assert.equal(tickSequenceMemory(state, 0).visual.activeIndex, 0);
+
   const completedLengths: number[] = [];
   while (state.lifecycle === 'PLAYING') {
     completedLengths.push(state.sequence.length);
