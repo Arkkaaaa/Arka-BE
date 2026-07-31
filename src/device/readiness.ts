@@ -73,7 +73,7 @@ export const DeviceReadinessSchema = z
   });
 export type DeviceReadiness = z.infer<typeof DeviceReadinessSchema>;
 
-export const DEVICE_READINESS_TTL_SECONDS = 60;
+export const DEVICE_READINESS_TTL_SECONDS = 15;
 
 export function offlineMode3Readiness(): DeviceReadiness {
   return {

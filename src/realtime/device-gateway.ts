@@ -40,20 +40,8 @@ import type { AuthoritativeRuntime } from './runtime.js';
 import type { RealtimeDependencies } from './types.js';
 
 const CONNECTION_KEY = 'arka:{mode3}:connection';
-const CONNECTION_TTL_SECONDS = 60;
+const CONNECTION_TTL_SECONDS = 15;
 const COMMAND_POLL_MS = 100;
-const ACQUIRE_CONNECTION_SCRIPT = `
-local current = redis.call('GET', KEYS[1])
-if not current then
-  redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
-  return 'ACQUIRED'
-end
-if ARGV[3] ~= '' and current == ARGV[3] and ARGV[4] == '1' then
-  redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
-  return 'TAKEN_OVER'
-end
-return 'ACTIVE'
-`;
 export const DEVICE_READINESS_LOW_BATTERY_PERCENT = 30;
 export const DEVICE_INTERRUPT_LOW_BATTERY_PERCENT = 10;
 const REFRESH_CONNECTION_SCRIPT = `
@@ -296,31 +284,21 @@ export class DeviceRealtimeGateway {
               return;
             }
             const connectionId = randomUUID();
-            const readiness = await readDeviceReadiness(this.dependencies.redis);
-            const lastSeenAtMs = readiness.lastSeenAt ? Date.parse(readiness.lastSeenAt) : Number.NaN;
-            const stale = Number.isFinite(lastSeenAtMs) && Date.now() - lastSeenAtMs > DEVICE_STALE_AFTER_MS;
-            const acquired = await this.dependencies.redis.eval(
-              ACQUIRE_CONNECTION_SCRIPT,
-              1,
+            const acquired = await this.dependencies.redis.set(
               CONNECTION_KEY,
               connectionId,
-              String(CONNECTION_TTL_SECONDS),
-              readiness.connectionId ?? '',
-              stale ? '1' : '0',
+              'EX',
+              CONNECTION_TTL_SECONDS,
+              'NX',
             );
-            if (acquired === 'ACTIVE') {
+            if (acquired !== 'OK') {
+              const readiness = await readDeviceReadiness(this.dependencies.redis);
               this.dependencies.logger.info(
                 { activeConnectionId: readiness.connectionId, lastSeenAt: readiness.lastSeenAt },
                 'Proof perangkat ditolak karena koneksi aktif',
               );
               closeProtocol(socket, 'Perangkat sudah terhubung');
               return;
-            }
-            if (acquired === 'TAKEN_OVER') {
-              this.dependencies.logger.warn(
-                { staleConnectionId: readiness.connectionId, lastSeenAt: readiness.lastSeenAt },
-                'Lease perangkat stale diambil alih',
-              );
             }
             const now = Date.now();
             connection = {
