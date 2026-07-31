@@ -38,7 +38,7 @@ export interface SequenceMemoryMetrics {
   completionReason: 'LIVES_EXHAUSTED' | 'LEVEL_CAP_REACHED';
 }
 
-type PendingAction = 'REPEAT' | 'NEXT_LEVEL';
+type PendingAction = 'REPEAT';
 
 export interface SequenceMemoryState {
   readonly mode: 'SEQUENCE_MEMORY';
@@ -275,10 +275,6 @@ function beginExample(
 function applyPendingAction(state: SequenceMemoryState, nowMs: number): SequenceMemoryState {
   if (state.pendingAction === 'REPEAT')
     return beginExample(state, nowMs, state.sequence, state.randomState);
-  if (state.pendingAction === 'NEXT_LEVEL') {
-    const [sequence, randomState] = appendConstrained(state.sequence, state.randomState);
-    return beginExample(state, nowMs, sequence, randomState);
-  }
   return state;
 }
 
@@ -346,7 +342,7 @@ function transition(state: SequenceMemoryState): SequenceMemoryTransition {
       activeIndex: cue?.index ?? null,
       sequenceLength: state.sequence.length,
       responseIndex: state.responseIndex,
-      errorIndex: state.errorIndex,
+      errorIndex: state.errorIndex ?? null,
       feedback: state.feedback,
     },
     completed: state.completion,
@@ -377,20 +373,15 @@ export function inputSequenceMemory(
     return transition({ ...next, responseIndex, feedback: 'CORRECT' });
 
   next = recordAttempt({ ...next, responseIndex }, 'SUCCESS', nowMs);
-  const completedLevels = next.completedLevels + 1;
   next = {
     ...next,
-    completedLevels,
+    completedLevels: next.completedLevels + 1,
     maxSequenceLength: Math.max(next.maxSequenceLength, next.sequence.length),
-    phase: 'FEEDBACK',
-    phaseStartedAtMs: nowMs,
-    phaseEndsAtMs: nowMs + next.config.feedbackMs,
-    pendingAction: 'NEXT_LEVEL',
-    feedback: 'CORRECT',
   };
   if (next.sequence.length >= next.config.maxSequenceLength)
-    next = metricsCompletion(next, 'LEVEL_CAP_REACHED');
-  return transition(next);
+    return transition(metricsCompletion(next, 'LEVEL_CAP_REACHED'));
+  const [sequence, randomState] = appendConstrained(next.sequence, next.randomState);
+  return transition(beginExample(next, nowMs, sequence, randomState));
 }
 
 export function tickSequenceMemory(
