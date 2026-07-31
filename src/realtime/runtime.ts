@@ -1220,7 +1220,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       sessionId: runtime.sessionId,
       kind: 'FEEDBACK',
       payload: { action: `LED_${cue.item}`, expiresAfterMs: durationMs },
-      expiresAt: new Date(Date.now() + 250),
+      expiresAt: new Date(Date.now() + 1_000),
     });
   }
 
