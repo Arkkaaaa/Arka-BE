@@ -88,24 +88,20 @@ async function authenticate(
   request: IncomingMessage,
   dependencies: RealtimeDependencies,
 ): Promise<OnboardedRealtimeAuthSession | null> {
-  try {
-    const auth = await dependencies.auth.api.getSession({ headers: webHeaders(request.headers) });
-    if (!auth) return null;
-    const user = await dependencies.prisma.user.findUnique({
-      where: { id: auth.user.id },
-      select: { institutionId: true },
-    });
-    const institutionId = user?.institutionId;
-    if (
-      !institutionId ||
-      !(await dependencies.validateSession(auth.session.id, auth.user.id, institutionId))
-    ) {
-      return null;
-    }
-    return { ...auth, user: { ...auth.user, institutionId } };
-  } catch {
+  const auth = await dependencies.auth.api.getSession({ headers: webHeaders(request.headers) });
+  if (!auth) return null;
+  const user = await dependencies.prisma.user.findUnique({
+    where: { id: auth.user.id },
+    select: { institutionId: true },
+  });
+  const institutionId = user?.institutionId;
+  if (
+    !institutionId ||
+    !(await dependencies.validateSession(auth.session.id, auth.user.id, institutionId))
+  ) {
     return null;
   }
+  return { ...auth, user: { ...auth.user, institutionId } };
 }
 
 async function ownsScope(

@@ -1,4 +1,4 @@
-import { Router, type RequestHandler } from 'express';
+import { Router } from 'express';
 import { asyncHandler } from '../../middleware/errors.js';
 import { validateBody, validateParams, validateQuery } from '../../middleware/validate.js';
 import type { ParticipantController } from './participant.controller.js';
@@ -10,15 +10,11 @@ import {
   UpdateParticipantRequestSchema,
 } from './participant.validation.js';
 
-export function createParticipantRouter(
-  controller: ParticipantController,
-  mutationActivity: RequestHandler,
-): Router {
+export function createParticipantRouter(controller: ParticipantController): Router {
   const router = Router();
 
   router.post(
     '/participants/resolve',
-    mutationActivity,
     validateBody(ResolveParticipantRequestSchema),
     asyncHandler(controller.resolve),
   );
@@ -29,7 +25,6 @@ export function createParticipantRouter(
   );
   router.patch(
     '/participants/:participantId',
-    mutationActivity,
     validateParams(ParticipantParamsSchema),
     validateBody(UpdateParticipantRequestSchema),
     asyncHandler(controller.update),

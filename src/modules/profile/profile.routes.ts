@@ -1,17 +1,13 @@
-import { Router, type RequestHandler } from 'express';
+import { Router } from 'express';
 import { asyncHandler } from '../../middleware/errors.js';
 import { validateBody } from '../../middleware/validate.js';
 import { UpdateProfileRequestSchema } from '../../schemas/index.js';
 import type { ProfileController } from './profile.controller.js';
 
-export function createProfileRoutes(
-  controller: ProfileController,
-  mutationActivity: RequestHandler,
-): Router {
+export function createProfileRoutes(controller: ProfileController): Router {
   const router = Router();
   router.patch(
     '/profile',
-    mutationActivity,
     validateBody(UpdateProfileRequestSchema),
     asyncHandler(controller.update),
   );

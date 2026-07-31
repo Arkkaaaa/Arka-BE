@@ -73,8 +73,13 @@ export function authenticate(
   prisma: PrismaClient,
   validateSession: (sessionId: string, userId: string, institutionId: string) => Promise<boolean>,
 ): RequestHandler {
-  return asyncHandler(async (req, _res, next) => {
-    const session = await auth.api.getSession({ headers: requestHeaders(req.headers) });
+  return asyncHandler(async (req, res, next) => {
+    const result = await auth.api.getSession({
+      headers: requestHeaders(req.headers),
+      returnHeaders: true,
+    });
+    for (const cookie of result.headers.getSetCookie()) res.append('Set-Cookie', cookie);
+    const session = result.response;
     if (!session) throw new AppError(401, 'unauthorized', 'Silakan masuk untuk melanjutkan.');
     const user = await prisma.user.findUnique({
       where: { id: session.user.id },

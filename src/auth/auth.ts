@@ -22,7 +22,13 @@ export interface AuthSession {
 
 export interface Auth {
   handler(request: Request): Promise<Response>;
-  api: { getSession(input: { headers: Headers }): Promise<AuthSession | null> };
+  api: {
+    getSession(input: { headers: Headers }): Promise<AuthSession | null>;
+    getSession(input: {
+      headers: Headers;
+      returnHeaders: true;
+    }): Promise<{ headers: Headers; response: AuthSession | null }>;
+  };
 }
 
 export function createAuth(prisma: PrismaClient, env: Env): Auth {

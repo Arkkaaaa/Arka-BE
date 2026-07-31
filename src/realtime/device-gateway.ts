@@ -3,7 +3,6 @@ import WebSocket, { WebSocketServer, type RawData } from 'ws';
 import { issueDeviceChallenge, verifyDeviceProof } from '../device/authentication.js';
 import {
   acknowledgeMode3Command,
-  clearMode3Ownership,
   commandToWire,
   deleteMode3Association,
   listMode3Commands,
@@ -191,7 +190,6 @@ export class DeviceRealtimeGateway {
           if (Number(released) !== 1) return;
           await writeDeviceReadiness(this.dependencies.redis, offlineMode3Readiness());
           await this.runtime.interruptMode3(reason);
-          await clearMode3Ownership(this.dependencies.redis);
         })
         .finally(() => this.#connections.delete(socketConnection));
       return this.trackCleanup(cleanupPromise);

@@ -32,7 +32,7 @@ const logger = createLogger(env);
 const prisma = getPrisma(env);
 const redis = createRedis(env, logger);
 const auth = createAuth(prisma, env);
-const sessionActivity = new SessionActivityService(new AuthRepository(prisma, redis), logger);
+const sessionActivity = new SessionActivityService(new AuthRepository(prisma), logger);
 const validateSession = sessionActivity.validate.bind(sessionActivity);
 const realtime = createRealtimeAttachment({
   prisma,
@@ -116,7 +116,6 @@ app.use(
     redis,
     env,
     runtime: realtime.runtime,
-    touchSession: sessionActivity.touch.bind(sessionActivity),
   }),
 );
 app.use(notFoundHandler);

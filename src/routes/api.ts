@@ -1,8 +1,8 @@
-import { Router, type RequestHandler } from 'express';
+import { Router } from 'express';
 import type { Env } from '../config/env.js';
 import type { RedisClient } from '../db/redis.js';
 import type { PrismaClient } from '../generated/prisma/client.js';
-import { AppError, asyncHandler } from '../middleware/errors.js';
+
 import { requireInstitution } from '../middleware/security.js';
 import { AuthController } from '../modules/auth/auth.controller.js';
 import { createAuthRouter } from '../modules/auth/auth.routes.js';
@@ -40,25 +40,10 @@ export interface ApiRouterDependencies {
   readonly redis: RedisClient;
   readonly env: Env;
   readonly runtime: RuntimeGateway;
-  readonly touchSession: (sessionId: string) => Promise<void>;
-}
-function authenticatedSessionId(req: Parameters<RequestHandler>[0]): string {
-  if (!req.authContext) {
-    throw new AppError(401, 'unauthorized', 'Silakan masuk untuk melanjutkan.');
-  }
-  return req.authContext.sessionId;
-}
-
-function mutationActivity(touchSession: (sessionId: string) => Promise<void>) {
-  return asyncHandler(async (req, _res, next) => {
-    await touchSession(authenticatedSessionId(req));
-    next();
-  });
 }
 
 export function createApiRouter(dependencies: ApiRouterDependencies): Router {
   const router = Router();
-  const activity = mutationActivity(dependencies.touchSession);
 
   const authController = new AuthController(dependencies.env.BETTER_AUTH_SECRET, dependencies.prisma);
   const participantController = new ParticipantController(
@@ -70,7 +55,7 @@ export function createApiRouter(dependencies: ApiRouterDependencies): Router {
   const profileController = new ProfileController(
     new ProfileService(new ProfileRepository(dependencies.prisma)),
   );
-  const deviceRepository = new DeviceRepository(dependencies.prisma, dependencies.redis);
+  const deviceRepository = new DeviceRepository(dependencies.redis);
   const deviceController = new DeviceController(new DeviceService(deviceRepository));
   const dashboardController = new DashboardController(
     new DashboardService(new DashboardRepository(dependencies.prisma, deviceRepository)),
@@ -85,10 +70,10 @@ export function createApiRouter(dependencies: ApiRouterDependencies): Router {
 
   router.use(createAuthRouter(authController));
   router.use(requireInstitution);
-  router.use(createProfileRoutes(profileController, activity));
-  router.use(createParticipantRouter(participantController, activity));
-  router.use(createDeviceRoutes(deviceController, activity));
-  router.use(createGameRoutes(gameController, activity));
+  router.use(createProfileRoutes(profileController));
+  router.use(createParticipantRouter(participantController));
+  router.use(createDeviceRoutes(deviceController));
+  router.use(createGameRoutes(gameController));
   router.use(createDashboardRoutes(dashboardController));
   return router;
 }

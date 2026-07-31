@@ -15,14 +15,13 @@ import { writeAudit } from '../services/audit.js';
 import {
   acquireMode3Lock,
   clearMode3Ownership,
-  deleteMode3Association,
   enqueueMode3Command,
+  readMode3Association,
   readMode3Lock,
   refreshMode3Lock,
   transitionMode3Lock,
   updateMode3AssociationState,
   writeMode3Association,
-  type Mode3Lock,
 } from '../device/commands.js';
 import {
   MODE3_DEVICE_LABEL,
@@ -65,6 +64,7 @@ import type { RuntimeDependencies } from './types.js';
 import {
   MODE3_DEMO_HOST_KEY,
   MODE3_DEMO_RULE_VERSION,
+  MODE3_SINGLETON_KEY,
 } from '../device/mode3-demo.js';
 import { RealtimeEventStore } from './events.js';
 
@@ -80,6 +80,7 @@ const COMPANION_PRESENCE_CHECK_MS = 1_000;
 const FINALIZATION_RECOVERY_MS = RUNTIME_TTL_SECONDS * 1_000;
 const FINALIZATION_LEASE_MS = 30_000;
 const FINALIZATION_RETRY_MS = 1_000;
+const MODE3_LOCK_REFRESH_MS = 10_000;
 const ADD_COMPANION_PRESENCE_SCRIPT = `
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
 redis.call('ZADD', KEYS[1], ARGV[2], ARGV[3])
@@ -187,7 +188,7 @@ interface PreparationRuntime {
 interface SessionRuntime {
   readonly sessionId: string;
   readonly mode: Mode;
-  readonly deviceId: string;
+  readonly lockId: string;
   readonly ownerSessionId: string;
   readonly displayName: string;
   readonly config: Record<string, unknown>;
@@ -337,6 +338,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
   readonly #nextPresenceChecks = new Map<string, number>();
   readonly #nextFinalizationAttempts = new Map<string, number>();
   #nextPreparationExpirySweepMs = 0;
+  #nextMode3LockRefreshMs = 0;
   #timer: NodeJS.Timeout | null = null;
 
   constructor(
@@ -440,37 +442,26 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       throw new AppError(409, 'game_rule_unavailable', 'Aturan permainan belum tersedia.');
     const rule = ruleVersions[0]!;
     const config = parseRule(input.mode, rule.config);
-    const devices = await this.dependencies.prisma.device.findMany({
-      where:
-        input.mode === 'SEQUENCE_MEMORY'
-          ? { deviceId: MODE3_DEMO_DEVICE_KEY, inventoryStatus: 'ACTIVE', revokedAt: null }
-          : {
-              institutionId: input.institutionId,
-              inventoryStatus: 'ACTIVE',
-              revokedAt: null,
-            },
-      orderBy: { provisionedAt: 'asc' },
-    });
-    let selected: { device: (typeof devices)[number]; readiness: DeviceReadiness } | null = null;
-    for (const device of devices) {
-      const readiness = await readDeviceReadiness(this.dependencies.redis, device.deviceId);
-      if (
-        readiness.readinessCode === 'READY' &&
-        readiness.capabilities.includes(capabilityFor(input.mode))
-      ) {
-        selected = { device, readiness };
-        break;
-      }
-    }
-    if (!selected)
+    const readiness = await readDeviceReadiness(this.dependencies.redis);
+    if (
+      readiness.readinessCode !== 'READY' ||
+      !readiness.capabilities.includes(capabilityFor(input.mode))
+    )
       throw new AppError(409, 'device_unavailable', 'Perangkat yang sesuai belum siap.');
-    const selectedDevice = selected;
 
     const now = new Date();
     const ttlMs = this.dependencies.env?.PREPARATION_TTL_MS ?? 300_000;
     const setupId = randomUUID();
     const preparationId = randomBytes(24).toString('base64url');
-    const reservationId = randomUUID();
+    const lock = await acquireMode3Lock(this.dependencies.redis, {
+      institutionId: input.institutionId,
+      ownerSessionId: input.ownerSessionId,
+      holderType: 'PREPARATION',
+      preparationId,
+      setupId,
+    });
+    if (!lock) throw new AppError(409, 'device_reserved', 'Perangkat sedang digunakan.');
+
     let preparation;
     try {
       const participant = input.participantReference
@@ -479,64 +470,49 @@ export class AuthoritativeRuntime implements RuntimeGateway {
             participantReference: input.participantReference,
           })
         : null;
-      preparation = await this.dependencies.prisma.$transaction(async (tx) => {
-        const created = await tx.gamePreparation.create({
-          data: {
-            preparationId,
-            setupId,
-            institutionId: input.institutionId,
-            ownerSessionId: input.ownerSessionId,
-            participantId: participant?.id ?? null,
-            displayNameSnapshot: input.displayName,
-            participantRefSnapshot: input.participantReference ?? null,
-            mode: input.mode,
-            deviceId: selectedDevice.device.deviceId,
-            ruleVersionId: rule.id,
-            configSnapshot: toInputJson(config),
-            firmwareSnapshot: { firmwareVersion: selectedDevice.readiness.firmwareVersion },
-            capabilitySnapshot: toInputJson(selectedDevice.readiness.capabilities),
-            state: 'BINDING_SETUP',
-            privacyAcknowledgedAt: now,
-            expiresAt: new Date(now.getTime() + ttlMs),
-          },
-        });
-        await tx.deviceReservation.create({
-          data: {
-            deviceId: selectedDevice.device.deviceId,
-            reservationId,
-            institutionId: input.institutionId,
-            holderType: 'PREPARATION',
-            preparationId: created.id,
-          },
-        });
-        await enqueueDeviceCommand(tx, {
-          deviceId: selectedDevice.device.deviceId,
-          reservationId,
-          associationId: setupId,
-          kind: 'SETUP_BIND',
-          payload: {},
-          expiresAt: new Date(
-            now.getTime() + (this.dependencies.env?.DEVICE_COMMAND_TTL_MS ?? 30_000),
-          ),
-        });
-        return created;
+      preparation = await this.dependencies.prisma.gamePreparation.create({
+        data: {
+          preparationId,
+          setupId,
+          institutionId: input.institutionId,
+          ownerSessionId: input.ownerSessionId,
+          participantId: participant?.id ?? null,
+          displayNameSnapshot: input.displayName,
+          participantRefSnapshot: input.participantReference ?? null,
+          mode: input.mode,
+          ruleVersionId: rule.id,
+          configSnapshot: toInputJson(config),
+          firmwareSnapshot: { firmwareVersion: readiness.firmwareVersion },
+          capabilitySnapshot: toInputJson(readiness.capabilities),
+          state: 'BINDING_SETUP',
+          privacyAcknowledgedAt: now,
+          expiresAt: new Date(now.getTime() + ttlMs),
+        },
+      });
+      await writeMode3Association(this.dependencies.redis, {
+        lockId: lock.lockId,
+        associationId: setupId,
+        type: 'SETUP',
+        state: 'BINDING',
+      });
+      await enqueueMode3Command(this.dependencies.redis, {
+        lockId: lock.lockId,
+        associationId: setupId,
+        kind: 'SETUP_BIND',
+        payload: {},
+        expiresAt: new Date(
+          now.getTime() + (this.dependencies.env?.DEVICE_COMMAND_TTL_MS ?? 30_000),
+        ),
       });
     } catch (error) {
-      if (
-        typeof error === 'object' &&
-        error !== null &&
-        'code' in error &&
-        error.code === 'P2002'
-      ) {
-        throw new AppError(409, 'device_reserved', 'Perangkat sedang digunakan.');
-      }
+      await clearMode3Ownership(this.dependencies.redis, lock.lockId);
       throw error;
     }
     const runtime: PreparationRuntime = {
       preparationId,
       setupId,
       mode: input.mode,
-      deviceId: selected.device.deviceId,
+      lockId: lock.lockId,
       config,
       state: 'BINDING_SETUP',
       setupBound: false,
@@ -561,9 +537,9 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       state: preparation.state,
       expiresAt: preparation.expiresAt.toISOString(),
       device: {
-        deviceId: selected.device.deviceId,
-        label: selected.device.label,
-        readinessCode: selected.readiness.readinessCode,
+        deviceId: MODE3_SINGLETON_KEY,
+        label: MODE3_DEVICE_LABEL,
+        readinessCode: readiness.readinessCode,
       },
       setupBound: false,
       calibration: null,
@@ -592,19 +568,22 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         institutionId: input.institutionId,
         ownerSessionId: input.ownerSessionId,
       },
-      include: { reservation: true, ruleVersion: true },
+      include: { ruleVersion: true },
     });
     if (!preparation)
       throw new AppError(404, 'preparation_not_found', 'Persiapan tidak ditemukan.');
-    if (
-      preparation.state !== 'READY' ||
-      preparation.expiresAt <= new Date() ||
-      !preparation.reservation
-    ) {
+    if (preparation.state !== 'READY' || preparation.expiresAt <= new Date())
       throw new AppError(409, 'preparation_not_ready', 'Persiapan belum siap dimulai.');
-    }
-    const reservationId = preparation.reservation.reservationId;
     const setup = await this.loadPreparation(preparation.setupId);
+    const currentLock = await readMode3Lock(this.dependencies.redis);
+    if (
+      !setup ||
+      !currentLock ||
+      currentLock.lockId !== setup.lockId ||
+      currentLock.holderType !== 'PREPARATION' ||
+      currentLock.preparationId !== preparation.preparationId
+    )
+      throw new AppError(409, 'preparation_not_ready', 'Persiapan belum siap dimulai.');
     if (!setup?.calibration && preparation.mode !== 'SEQUENCE_MEMORY')
       throw new AppError(409, 'calibration_required', 'Kalibrasi belum selesai.');
     if (preparation.mode === 'GO_NO_GO' && !preparation.practiceCompletedAt)
@@ -619,78 +598,90 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       status: 'BINDING',
       bindingDeadlineAt: bindingDeadlineAt.toISOString(),
     });
-    await this.dependencies.prisma.$transaction(async (tx) => {
-      await tx.gameSession.create({
-        data: {
-          id: sessionId,
-          institutionId: input.institutionId,
-          ownerSessionId: input.ownerSessionId,
-          participantId: preparation.participantId,
-          preparationId: preparation.id,
-          displayNameSnapshot: preparation.displayNameSnapshot,
-          mode: preparation.mode,
-          deviceId: preparation.deviceId,
-          reservationId,
-          ruleVersionId: preparation.ruleVersionId,
-          configSnapshot:
-            preparation.configSnapshot === null
-              ? Prisma.JsonNull
-              : toInputJson(preparation.configSnapshot),
-          capabilitySnapshot:
-            preparation.capabilitySnapshot === null
-              ? Prisma.JsonNull
-              : toInputJson(preparation.capabilitySnapshot),
-          ...(preparation.firmwareSnapshot === null
-            ? {}
-            : { firmwareSnapshot: toInputJson(preparation.firmwareSnapshot) }),
-          ...(setup?.calibration ? { calibrationSnapshot: toInputJson(setup.calibration) } : {}),
-          gameRuleVersionSnapshot: preparation.ruleVersion.version,
-          bindingDeadlineAt,
-        },
+    const sessionLock = await transitionMode3Lock(this.dependencies.redis, currentLock, {
+      holderType: 'SESSION',
+      sessionId,
+      state: 'HELD',
+    });
+    if (!sessionLock)
+      throw new AppError(409, 'device_reserved', 'Kepemilikan perangkat sudah berubah.');
+    try {
+      await this.dependencies.prisma.$transaction(async (tx) => {
+        await tx.gameSession.create({
+          data: {
+            id: sessionId,
+            institutionId: input.institutionId,
+            ownerSessionId: input.ownerSessionId,
+            participantId: preparation.participantId,
+            preparationId: preparation.id,
+            displayNameSnapshot: preparation.displayNameSnapshot,
+            mode: preparation.mode,
+            ruleVersionId: preparation.ruleVersionId,
+            configSnapshot:
+              preparation.configSnapshot === null
+                ? Prisma.JsonNull
+                : toInputJson(preparation.configSnapshot),
+            capabilitySnapshot:
+              preparation.capabilitySnapshot === null
+                ? Prisma.JsonNull
+                : toInputJson(preparation.capabilitySnapshot),
+            ...(preparation.firmwareSnapshot === null
+              ? {}
+              : { firmwareSnapshot: toInputJson(preparation.firmwareSnapshot) }),
+            ...(setup.calibration ? { calibrationSnapshot: toInputJson(setup.calibration) } : {}),
+            gameRuleVersionSnapshot: preparation.ruleVersion.version,
+            bindingDeadlineAt,
+          },
+        });
+        const consumed = await tx.gamePreparation.updateMany({
+          where: { id: preparation.id, state: 'READY', expiresAt: { gt: now } },
+          data: { state: 'CONSUMED', consumedAt: now },
+        });
+        if (consumed.count === 0)
+          throw new AppError(
+            409,
+            'preparation_not_ready',
+            'Persiapan sudah digunakan atau kedaluwarsa.',
+          );
+        await tx.sessionCreationRequest.create({
+          data: {
+            ownerSessionId: input.ownerSessionId,
+            idempotencyKey: input.idempotencyKey,
+            requestFingerprint: input.requestFingerprint,
+            responseSnapshot: response,
+            sessionId,
+            expiresAt: new Date(
+              now.getTime() + (this.dependencies.env?.IDEMPOTENCY_TTL_MS ?? 86_400_000),
+            ),
+          },
+        });
       });
-      const consumed = await tx.gamePreparation.updateMany({
-        where: { id: preparation.id, state: 'READY', expiresAt: { gt: now } },
-        data: { state: 'CONSUMED', consumedAt: now },
+    } catch (error) {
+      await transitionMode3Lock(this.dependencies.redis, sessionLock, {
+        holderType: 'PREPARATION',
+        sessionId: null,
+        state: 'HELD',
       });
-      if (consumed.count === 0)
-        throw new AppError(
-          409,
-          'preparation_not_ready',
-          'Persiapan sudah digunakan atau kedaluwarsa.',
-        );
-      await tx.deviceReservation.update({
-        where: { deviceId: preparation.deviceId },
-        data: {
-          holderType: 'SESSION',
-          preparationId: null,
-          sessionId,
-        },
-      });
-      await enqueueDeviceCommand(tx, {
-        deviceId: preparation.deviceId,
-        reservationId: preparation.reservation!.reservationId,
-        associationId: preparation.setupId,
-        kind: 'SETUP_UNBIND',
-        payload: {},
-        expiresAt: bindingDeadlineAt,
-      });
-      await tx.sessionCreationRequest.create({
-        data: {
-          ownerSessionId: input.ownerSessionId,
-          idempotencyKey: input.idempotencyKey,
-          requestFingerprint: input.requestFingerprint,
-          responseSnapshot: response,
-          sessionId,
-          expiresAt: new Date(
-            now.getTime() + (this.dependencies.env?.IDEMPOTENCY_TTL_MS ?? 86_400_000),
-          ),
-        },
-      });
+      throw error;
+    }
+    await updateMode3AssociationState(
+      this.dependencies.redis,
+      'SETUP',
+      preparation.setupId,
+      sessionLock.lockId,
+      'UNBINDING',
+    );
+    await enqueueMode3Command(this.dependencies.redis, {
+      lockId: sessionLock.lockId,
+      associationId: preparation.setupId,
+      kind: 'SETUP_UNBIND',
+      payload: {},
+      expiresAt: bindingDeadlineAt,
     });
     const runtime: SessionRuntime = {
       sessionId,
       mode: preparation.mode,
-      deviceId: preparation.deviceId,
+      lockId: sessionLock.lockId,
       ownerSessionId: input.ownerSessionId,
       displayName: preparation.displayNameSnapshot,
       config: parseRule(preparation.mode, preparation.configSnapshot),
@@ -847,31 +838,31 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     await this.publishPreparation(runtime);
   }
 
-  async handleSetupUnbound(setupId: string, commandId: string): Promise<void> {
+  async handleSetupUnbound(setupId: string, _commandId: string): Promise<void> {
     const session = await this.dependencies.prisma.gameSession.findFirst({
       where: { preparation: { setupId }, status: 'BINDING' },
-      include: { reservation: true },
     });
-    if (session?.reservation) {
-      await this.dependencies.prisma.$transaction(async (tx) => {
-        await enqueueDeviceCommand(tx, {
-          deviceId: session.deviceId,
-          reservationId: session.reservation!.reservationId,
-          associationId: session.id,
-          sessionId: session.id,
-          kind: 'SESSION_BIND',
-          payload: { precededBy: commandId },
-          expiresAt: session.bindingDeadlineAt,
-        });
-      });
+    if (!session) {
+      const lock = await readMode3Lock(this.dependencies.redis);
+      if (lock?.setupId === setupId) await clearMode3Ownership(this.dependencies.redis, lock.lockId);
       return;
     }
-    await this.dependencies.prisma.deviceReservation.deleteMany({
-      where: {
-        state: 'RELEASING',
-        releaseCommandId: commandId,
-        preparation: { setupId },
-      },
+    const runtime = await this.loadSession(session.id);
+    const lock = await readMode3Lock(this.dependencies.redis);
+    if (!runtime || !lock || lock.lockId !== runtime.lockId || lock.sessionId !== session.id) return;
+    await writeMode3Association(this.dependencies.redis, {
+      lockId: lock.lockId,
+      associationId: session.id,
+      type: 'SESSION',
+      state: 'BINDING',
+    });
+    await enqueueMode3Command(this.dependencies.redis, {
+      lockId: lock.lockId,
+      associationId: session.id,
+      sessionId: session.id,
+      kind: 'SESSION_BIND',
+      payload: {},
+      expiresAt: session.bindingDeadlineAt,
     });
   }
 
@@ -913,18 +904,11 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     }
   }
 
-  async interruptDevice(deviceId: string, reason: string): Promise<void> {
-    const preparations = await this.dependencies.prisma.gamePreparation.findMany({
-      where: { deviceId, state: { in: ['BINDING_SETUP', 'CALIBRATING', 'PRACTICING', 'READY'] } },
-      select: { setupId: true },
-    });
-    for (const preparation of preparations)
-      await this.cancelPreparation(preparation.setupId, reason);
-    const sessions = await this.dependencies.prisma.gameSession.findMany({
-      where: { deviceId, status: { in: ['BINDING', 'COUNTDOWN', 'PLAYING', 'PAUSED'] } },
-      select: { id: true },
-    });
-    for (const session of sessions) await this.interruptSession(session.id, reason);
+  async interruptMode3(reason: string): Promise<void> {
+    const lock = await readMode3Lock(this.dependencies.redis);
+    if (!lock) return;
+    if (lock.holderType === 'PREPARATION') await this.cancelPreparation(lock.setupId, reason);
+    else if (lock.sessionId) await this.interruptSession(lock.sessionId, reason);
   }
 
   async expireOwnerSession(ownerSessionId: string): Promise<void> {
@@ -1169,6 +1153,16 @@ export class AuthoritativeRuntime implements RuntimeGateway {
 
   private async tick(): Promise<void> {
     const now = Date.now();
+    if (now >= this.#nextMode3LockRefreshMs) {
+      this.#nextMode3LockRefreshMs = now + MODE3_LOCK_REFRESH_MS;
+      const lock = await readMode3Lock(this.dependencies.redis);
+      const active =
+        lock?.state === 'HELD' &&
+        (lock.holderType === 'PREPARATION'
+          ? this.#activeSetups.has(lock.setupId)
+          : lock.sessionId !== null && this.#activeSessions.has(lock.sessionId));
+      if (lock && active) await refreshMode3Lock(this.dependencies.redis, lock.lockId);
+    }
     if (now >= this.#nextPreparationExpirySweepMs) {
       this.#nextPreparationExpirySweepMs = now + PREPARATION_EXPIRY_SWEEP_MS;
       await this.expirePreparations(new Date(now));
@@ -1428,7 +1422,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       await this.dependencies.prisma.$transaction(async (tx) => {
         const session = await tx.gameSession.findFirstOrThrow({
           where: { id: sessionId, status: 'SAVING', finalizationLeaseToken: leaseToken },
-          include: { reservation: true, result: true },
+          include: { result: true },
         });
         const parsed = FinalizationPayloadSchema.safeParse(session.finalizationPayload);
         if (!parsed.success)
@@ -1450,7 +1444,8 @@ export class AuthoritativeRuntime implements RuntimeGateway {
                 ? {}
                 : { calibrationContext: toInputJson(session.calibrationSnapshot) }),
               deviceSnapshot: toInputJson({
-                deviceId: session.deviceId,
+                deviceId: MODE3_SINGLETON_KEY,
+                label: MODE3_DEVICE_LABEL,
                 firmware: session.firmwareSnapshot,
                 capabilities: session.capabilitySnapshot,
               }),
@@ -1489,21 +1484,6 @@ export class AuthoritativeRuntime implements RuntimeGateway {
           }
           await tx.aiSessionSummary.create({
             data: { sessionId: session.id, status: 'PENDING' },
-          });
-        }
-        if (session.reservation && session.reservation.state !== 'RELEASING') {
-          const cleanup = await enqueueDeviceCommand(tx, {
-            deviceId: session.deviceId,
-            reservationId: session.reservation.reservationId,
-            sessionId: session.id,
-            associationId: session.id,
-            kind: 'SESSION_UNBIND',
-            payload: {},
-            expiresAt: new Date(Date.now() + 30_000),
-          });
-          await tx.deviceReservation.update({
-            where: { deviceId: session.deviceId },
-            data: { state: 'RELEASING', releaseCommandId: cleanup.commandId },
           });
         }
         const saved = await tx.gameSession.updateMany({
@@ -1551,6 +1531,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     sessionId: string,
     outcome: 'SAVED' | 'SAVE_FAILED',
   ): Promise<void> {
+    await this.requestSessionCleanup(sessionId);
     this.#nextFinalizationAttempts.delete(sessionId);
     this.#activeSessions.delete(sessionId);
     this.#nextPresenceChecks.delete(sessionId);
@@ -1612,52 +1593,95 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     });
   }
 
+  private async requestPreparationCleanup(setupId: string, reason: string): Promise<void> {
+    const runtime = await this.loadPreparation(setupId);
+    const lock = await readMode3Lock(this.dependencies.redis);
+    if (!runtime || !lock || lock.lockId !== runtime.lockId || lock.setupId !== setupId) return;
+    const association = await readMode3Association(this.dependencies.redis, 'SETUP', setupId);
+    if (!association) {
+      await clearMode3Ownership(this.dependencies.redis, lock.lockId);
+      return;
+    }
+    if (association.state === 'UNBINDING') return;
+    const releasing = await transitionMode3Lock(this.dependencies.redis, lock, {
+      holderType: lock.holderType,
+      sessionId: lock.sessionId,
+      state: 'RELEASING',
+    });
+    if (!releasing) return;
+    await updateMode3AssociationState(
+      this.dependencies.redis,
+      'SETUP',
+      setupId,
+      releasing.lockId,
+      'UNBINDING',
+    );
+    await enqueueMode3Command(this.dependencies.redis, {
+      lockId: releasing.lockId,
+      associationId: setupId,
+      kind: 'SETUP_UNBIND',
+      payload: { reason },
+      expiresAt: new Date(Date.now() + 30_000),
+    });
+  }
+
+  private async requestSessionCleanup(sessionId: string): Promise<void> {
+    const runtime = await this.loadSession(sessionId);
+    const lock = await readMode3Lock(this.dependencies.redis);
+    if (!runtime || !lock || lock.lockId !== runtime.lockId || lock.sessionId !== sessionId) return;
+    const association = await readMode3Association(this.dependencies.redis, 'SESSION', sessionId);
+    if (!association) {
+      const setupAssociation = await readMode3Association(
+        this.dependencies.redis,
+        'SETUP',
+        lock.setupId,
+      );
+      if (!setupAssociation) await clearMode3Ownership(this.dependencies.redis, lock.lockId);
+      return;
+    }
+    if (association.state === 'UNBINDING') return;
+    const releasing = await transitionMode3Lock(this.dependencies.redis, lock, {
+      holderType: 'SESSION',
+      sessionId,
+      state: 'RELEASING',
+    });
+    if (!releasing) return;
+    await updateMode3AssociationState(
+      this.dependencies.redis,
+      'SESSION',
+      sessionId,
+      releasing.lockId,
+      'UNBINDING',
+    );
+    await enqueueMode3Command(this.dependencies.redis, {
+      lockId: releasing.lockId,
+      associationId: sessionId,
+      sessionId,
+      kind: 'FEEDBACK',
+      payload: { action: 'HARD_STOP', expiresAfterMs: 1 },
+      expiresAt: new Date(Date.now() + 1_000),
+    });
+    await enqueueMode3Command(this.dependencies.redis, {
+      lockId: releasing.lockId,
+      associationId: sessionId,
+      sessionId,
+      kind: 'SESSION_UNBIND',
+      payload: {},
+      expiresAt: new Date(Date.now() + 30_000),
+    });
+  }
+
   private async terminateSession(
     sessionId: string,
     status: 'ABORTED' | 'INTERRUPTED',
     reason: string,
   ): Promise<void> {
-    const now = new Date();
-    const terminated = await this.dependencies.prisma.$transaction(async (tx) => {
-      const changed = await tx.gameSession.updateMany({
-        where: { id: sessionId, status: { in: ['BINDING', 'COUNTDOWN', 'PLAYING', 'PAUSED'] } },
-        data: {
-          status,
-          terminalReason: reason,
-          completedAt: now,
-        },
-      });
-      if (changed.count === 0) return false;
-      const session = await tx.gameSession.findUniqueOrThrow({
-        where: { id: sessionId },
-        include: { reservation: true },
-      });
-      if (session.reservation) {
-        await enqueueDeviceCommand(tx, {
-          deviceId: session.deviceId,
-          sessionId,
-          associationId: sessionId,
-          kind: 'FEEDBACK',
-          payload: { action: 'HARD_STOP', expiresAfterMs: 1 },
-          expiresAt: new Date(now.getTime() + 1_000),
-        });
-        const cleanup = await enqueueDeviceCommand(tx, {
-          deviceId: session.deviceId,
-          reservationId: session.reservation.reservationId,
-          sessionId,
-          associationId: sessionId,
-          kind: 'SESSION_UNBIND',
-          payload: {},
-          expiresAt: new Date(now.getTime() + 30_000),
-        });
-        await tx.deviceReservation.update({
-          where: { deviceId: session.deviceId },
-          data: { state: 'RELEASING', releaseCommandId: cleanup.commandId },
-        });
-      }
-      return true;
+    const changed = await this.dependencies.prisma.gameSession.updateMany({
+      where: { id: sessionId, status: { in: ['BINDING', 'COUNTDOWN', 'PLAYING', 'PAUSED'] } },
+      data: { status, terminalReason: reason, completedAt: new Date() },
     });
-    if (!terminated) return;
+    if (changed.count === 0) return;
+    await this.requestSessionCleanup(sessionId);
     this.#activeSessions.delete(sessionId);
     this.#nextPresenceChecks.delete(sessionId);
     await this.dependencies.redis.del(sessionKey(sessionId), companionPresenceKey(sessionId));
@@ -1696,42 +1720,21 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     reason: string,
     now: Date,
   ): Promise<void> {
-    const terminated = await this.dependencies.prisma.$transaction(async (tx) => {
-      const changed = await tx.gamePreparation.updateMany({
-        where: {
-          setupId,
-          state: {
-            in: ['WAITING_DEVICE', 'BINDING_SETUP', 'CALIBRATING', 'PRACTICING', 'READY'],
-          },
-          ...(terminalState === 'EXPIRED' ? { expiresAt: { lte: now } } : {}),
+    const changed = await this.dependencies.prisma.gamePreparation.updateMany({
+      where: {
+        setupId,
+        state: {
+          in: ['WAITING_DEVICE', 'BINDING_SETUP', 'CALIBRATING', 'PRACTICING', 'READY'],
         },
-        data: {
-          state: terminalState,
-          ...(terminalState === 'CANCELLED' ? { cancelledAt: now } : {}),
-        },
-      });
-      if (changed.count === 0) return false;
-      const preparation = await tx.gamePreparation.findUniqueOrThrow({
-        where: { setupId },
-        include: { reservation: true },
-      });
-      if (preparation.reservation) {
-        const cleanup = await enqueueDeviceCommand(tx, {
-          deviceId: preparation.deviceId,
-          reservationId: preparation.reservation.reservationId,
-          associationId: setupId,
-          kind: 'SETUP_UNBIND',
-          payload: { reason },
-          expiresAt: new Date(now.getTime() + 30_000),
-        });
-        await tx.deviceReservation.update({
-          where: { deviceId: preparation.deviceId },
-          data: { state: 'RELEASING', releaseCommandId: cleanup.commandId },
-        });
-      }
-      return true;
+        ...(terminalState === 'EXPIRED' ? { expiresAt: { lte: now } } : {}),
+      },
+      data: {
+        state: terminalState,
+        ...(terminalState === 'CANCELLED' ? { cancelledAt: now } : {}),
+      },
     });
-    if (!terminated) return;
+    if (changed.count === 0) return;
+    await this.requestPreparationCleanup(setupId, reason);
     const runtime = await this.loadPreparation(setupId);
     if (runtime) {
       runtime.state = terminalState;

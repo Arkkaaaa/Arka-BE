@@ -328,23 +328,6 @@ export const arkaOpenApi = {
         },
       },
     },
-    '/api/v1/devices/{deviceId}': {
-      patch: {
-        tags: ['Devices'],
-        summary: 'Change device inventory status',
-        description: 'A revoked device cannot be reactivated and an in-use device cannot be retired.',
-        operationId: 'updateDevice',
-        security,
-        parameters: [parameterRef('DeviceId'), parameterRef('CsrfToken')],
-        requestBody: body(ref('UpdateDeviceRequest'), { inventoryStatus: 'RETIRED' }),
-        responses: {
-          '200': success('Device updated.', ref('Device')),
-          ...institutionErrors,
-          '404': responseRef('NotFound'),
-          '409': responseRef('Conflict'),
-        },
-      },
-    },
     '/api/v1/game-preparations': {
       post: {
         tags: ['Games'],
@@ -456,13 +439,6 @@ export const arkaOpenApi = {
         description: 'Opaque public participant handle.',
         schema: ref('PublicId'),
         example: publicParticipantId,
-      },
-      DeviceId: {
-        name: 'deviceId',
-        in: 'path',
-        required: true,
-        schema: { type: 'string', minLength: 3, maxLength: 80 },
-        example: 'arka-device-001',
       },
       SessionId: {
         name: 'sessionId',
@@ -844,11 +820,6 @@ export const arkaOpenApi = {
           batteryPercent: 82,
           lastSeenAt: timestamp,
         },
-      },
-      UpdateDeviceRequest: {
-        type: 'object',
-        required: ['inventoryStatus'],
-        properties: { inventoryStatus: { type: 'string', enum: ['ACTIVE', 'RETIRED'] } },
       },
       DashboardSummary: {
         type: 'object',

@@ -127,9 +127,6 @@ export const DeviceDtoSchema = z.object({
   lastSeenAt: IsoDateSchema.nullable(),
 });
 export type DeviceDto = z.infer<typeof DeviceDtoSchema>;
-export const UpdateDeviceRequestSchema = z.object({
-  inventoryStatus: z.enum(['ACTIVE', 'RETIRED']),
-});
 export const DashboardSummaryDtoSchema = z.object({
   readyDevices: z.number().int().nonnegative(),
   onlineDevices: z.number().int().nonnegative(),
