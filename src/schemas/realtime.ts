@@ -55,7 +55,7 @@ export const SessionVisualSchema = z.discriminatedUnion('mode', [
     mode: z.literal('SEQUENCE_MEMORY'),
     phase: z.enum(['EXAMPLE', 'RESPONSE', 'FEEDBACK']),
     activeItem: z.enum(['RED', 'GREEN', 'BLUE', 'YELLOW']).nullable(),
-    sequenceLength: z.number().int().min(2),
+    sequenceLength: z.number().int().min(1),
     responseIndex: z.number().int().nonnegative(),
     lives: z.number().int().min(0).max(2),
     feedback: z.enum(['CORRECT', 'REPEAT', 'ONE_BUTTON']).nullable(),

@@ -1351,7 +1351,7 @@ export const arkaOpenApi = {
             type: ['string', 'null'],
             enum: ['RED', 'GREEN', 'BLUE', 'YELLOW', null],
           },
-          sequenceLength: { type: 'integer', minimum: 2 },
+          sequenceLength: { type: 'integer', minimum: 1 },
           responseIndex: { type: 'integer', minimum: 0 },
           lives: { type: 'integer', minimum: 0, maximum: 2 },
           feedback: {

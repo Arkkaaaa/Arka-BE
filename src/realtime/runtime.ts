@@ -123,8 +123,8 @@ const GoNoGoRuleSchema = z
   .refine((value) => value.releaseThresholdFraction < value.pressThresholdFraction);
 const SequenceRuleSchema = z
   .object({
-    initialSequenceLength: z.number().int().min(2),
-    maxSequenceLength: z.number().int().min(2).max(6).optional(),
+    initialSequenceLength: z.number().int().min(1),
+    maxSequenceLength: z.number().int().min(1).max(6).optional(),
     maxCompletedLevels: z.number().int().positive().optional(),
     initialLives: z.number().int().positive(),
     exampleItemMs: z.number().int().positive(),
@@ -335,6 +335,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
   readonly #nextFinalizationAttempts = new Map<string, number>();
   #nextPreparationExpirySweepMs = 0;
   #nextMode3LockRefreshMs = 0;
+  #tickActive = false;
   #timer: NodeJS.Timeout | null = null;
 
   constructor(
@@ -358,13 +359,15 @@ export class AuthoritativeRuntime implements RuntimeGateway {
 
   start(): void {
     if (this.#timer) return;
-    this.#timer = setInterval(
-      () =>
-        void this.tick().catch((error) =>
-          this.dependencies.logger.error({ err: error }, 'Realtime tick gagal'),
-        ),
-      100,
-    );
+    this.#timer = setInterval(() => {
+      if (this.#tickActive) return;
+      this.#tickActive = true;
+      void this.tick()
+        .catch((error) => this.dependencies.logger.error({ err: error }, 'Realtime tick gagal'))
+        .finally(() => {
+          this.#tickActive = false;
+        });
+    }, 100);
     this.#timer.unref();
   }
 
@@ -1197,7 +1200,11 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     }
   }
 
-  private async startPlaying(runtime: SessionRuntime, now: number): Promise<void> {
+  private async startPlaying(
+    runtime: SessionRuntime,
+    now: number,
+    durableRecovery = false,
+  ): Promise<void> {
     if (runtime.status !== 'COUNTDOWN') return;
     if (runtime.mode === 'MOTOR_GRIP') {
       const rule = MotorRuleSchema.parse(runtime.config);
@@ -1237,17 +1244,26 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         now,
       );
     }
+    if (!durableRecovery) {
+      const updated = await this.dependencies.prisma.gameSession.updateMany({
+        where: { id: runtime.sessionId, status: 'COUNTDOWN' },
+        data: {
+          status: 'PLAYING',
+          startedAt: new Date(now),
+          countdownEndsAt: null,
+        },
+      });
+      if (updated.count === 0) {
+        const durable = await this.dependencies.prisma.gameSession.findUnique({
+          where: { id: runtime.sessionId },
+          select: { status: true, startedAt: true },
+        });
+        if (durable?.status !== 'PLAYING' || durable.startedAt === null) return;
+        return this.startPlaying(runtime, durable.startedAt.getTime(), true);
+      }
+    }
     runtime.status = 'PLAYING';
     runtime.countdownEndsAtMs = null;
-    const updated = await this.dependencies.prisma.gameSession.updateMany({
-      where: { id: runtime.sessionId, status: 'COUNTDOWN' },
-      data: {
-        status: 'PLAYING',
-        startedAt: new Date(now),
-        countdownEndsAt: null,
-      },
-    });
-    if (updated.count === 0) return;
     await this.saveSession(runtime);
     await this.publishSession(runtime, 'Permainan dimulai.');
   }

@@ -18,7 +18,7 @@ function completeCurrentSequence(state: SequenceMemoryState): SequenceMemoryStat
 test('completes after the six-color sequence without generating a seventh color', () => {
   let state = createSequenceMemory(
     {
-      initialSequenceLength: 2,
+      initialSequenceLength: 1,
       maxSequenceLength: 6,
       initialLives: 2,
       exampleItemMs: 700,
@@ -37,7 +37,7 @@ test('completes after the six-color sequence without generating a seventh color'
     if (state.lifecycle === 'PLAYING') state = tickSequenceMemory(state, state.phaseEndsAtMs).state;
   }
 
-  assert.deepEqual(completedLengths, [2, 3, 4, 5, 6]);
+  assert.deepEqual(completedLengths, [1, 2, 3, 4, 5, 6]);
   assert.equal(state.sequence.length, 6);
   assert.equal(state.completion?.metrics.maxSequenceLength, 6);
   assert.equal(state.completion?.metrics.completionReason, 'LEVEL_CAP_REACHED');

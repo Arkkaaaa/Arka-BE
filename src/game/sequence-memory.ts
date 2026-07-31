@@ -88,7 +88,7 @@ function normalizedConfig(config: SequenceMemoryConfig): Required<SequenceMemory
   const value = { ...config, feedbackMs: config.feedbackMs ?? 750 };
   if (
     !Number.isSafeInteger(value.initialSequenceLength) ||
-    value.initialSequenceLength < 2 ||
+    value.initialSequenceLength < 1 ||
     !Number.isSafeInteger(value.maxSequenceLength) ||
     value.maxSequenceLength < value.initialSequenceLength ||
     !Number.isSafeInteger(value.initialLives) ||
@@ -140,8 +140,8 @@ function exampleDuration(sequenceLength: number, config: Required<SequenceMemory
 }
 
 export function generateMemorySequence(seed: number, length: number): readonly MemoryButton[] {
-  if (!Number.isSafeInteger(length) || length < 2)
-    throw new RangeError('Sequence length must be at least two');
+  if (!Number.isSafeInteger(length) || length < 1)
+    throw new RangeError('Sequence length must be at least one');
   let state = seed >>> 0 || 0x9e3779b9;
   let sequence: readonly MemoryButton[] = [];
   while (sequence.length < length) [sequence, state] = appendConstrained(sequence, state);
