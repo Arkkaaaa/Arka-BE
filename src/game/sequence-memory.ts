@@ -72,9 +72,11 @@ export interface SequenceMemoryState {
 export interface SequenceMemoryTransition {
   readonly state: SequenceMemoryState;
   readonly visual: {
+    mode: 'SEQUENCE_MEMORY';
     phase: 'EXAMPLE' | 'RESPONSE' | 'FEEDBACK';
     activeItem: MemoryButton | null;
     activeIndex: number | null;
+    cueId: string | null;
     sequenceLength: number;
     responseIndex: number;
     errorIndex: number | null;
@@ -337,9 +339,11 @@ function transition(state: SequenceMemoryState): SequenceMemoryTransition {
   return {
     state,
     visual: {
+      mode: 'SEQUENCE_MEMORY',
       phase: state.phase,
       activeItem: cue?.item ?? null,
       activeIndex: cue?.index ?? null,
+      cueId: cue ? `${state.phaseStartedAtMs}:${cue.index}` : null,
       sequenceLength: state.sequence.length,
       responseIndex: state.responseIndex,
       errorIndex: state.errorIndex ?? null,

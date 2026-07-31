@@ -56,6 +56,7 @@ export const SessionVisualSchema = z.discriminatedUnion('mode', [
     phase: z.enum(['EXAMPLE', 'RESPONSE', 'FEEDBACK']),
     activeItem: z.enum(['RED', 'GREEN', 'BLUE', 'YELLOW']).nullable(),
     activeIndex: z.number().int().min(0).max(5).nullable(),
+    cueId: z.string().regex(/^\d+:[0-5]$/).nullable(),
     sequenceLength: z.number().int().min(1),
     responseIndex: z.number().int().nonnegative(),
     errorIndex: z.number().int().min(0).max(5).nullable(),
