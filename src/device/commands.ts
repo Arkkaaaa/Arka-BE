@@ -9,6 +9,7 @@ const COMMAND_QUEUE_KEY = `${PREFIX}:commands`;
 const COMMAND_SEQUENCE_KEY = `${PREFIX}:command-sequence`;
 const LOCK_TTL_SECONDS = 30;
 const STATE_TTL_SECONDS = 3_600;
+const COMMAND_ACK_TIMEOUT_MS = 5_000;
 
 const LockSchema = z
   .object({
@@ -319,7 +320,8 @@ export async function acknowledgeMode3Command(
     command.associationId !== input.associationId ||
     command.connectionId !== input.connectionId ||
     command.bootId !== input.bootId ||
-    command.expiresAtMs <= Date.now()
+    command.lastDispatchedAtMs <= 0 ||
+    command.lastDispatchedAtMs + COMMAND_ACK_TIMEOUT_MS <= Date.now()
   )
     return null;
   const status = input.outcome === 'ACK' ? 'ACKED' : 'NACKED';
