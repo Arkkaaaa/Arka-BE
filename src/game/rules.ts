@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { GameMode, Prisma, type PrismaClient } from '../generated/prisma/client.js';
 
-export const GAME_RULE_VERSION = 'mvp-1.1.0';
+export const GAME_RULE_VERSION = 'mvp-1.2.0';
 const OWNER_PRESENCE_GRACE_MS = 30_000;
 
 export const GAME_RULES = [
