@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Redis } from 'ioredis';
 import { z } from 'zod';
-import type { DeviceServerMessage } from './protocol.js';
+import { DeviceFeedbackActionSchema, type DeviceServerMessage } from './protocol.js';
 
 const PREFIX = 'arka:{mode3}';
 const LOCK_KEY = `${PREFIX}:lock`;
@@ -370,18 +370,7 @@ export function commandToWire(command: Mode3Command, sentAtMs = Date.now()): Dev
   }
   const parsed = z
     .object({
-      action: z.enum([
-        'LED_SUCCESS',
-        'HAPTIC_SUCCESS',
-        'LED_CORRECT',
-        'LED_INCORRECT',
-        'LED_YELLOW',
-        'LED_GREEN',
-        'LED_RED',
-        'LED_BLUE',
-        'HAPTIC_PULSE',
-        'HARD_STOP',
-      ]),
+      action: DeviceFeedbackActionSchema,
       expiresAfterMs: z.number().int().min(1).max(1_000),
     })
     .strict()
