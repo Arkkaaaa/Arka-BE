@@ -11,6 +11,7 @@ export interface SequenceMemoryConfig {
   maxSequenceLength: number;
   exampleItemMs: number;
   exampleGapMs: number;
+  responsePromptMs?: number;
   responseTimeoutMs: number;
   maxAttempts?: number;
   feedbackMs?: number;
@@ -88,7 +89,12 @@ export interface SequenceMemoryTransition {
 }
 
 function normalizedConfig(config: SequenceMemoryConfig): Required<SequenceMemoryConfig> {
-  const value = { ...config, maxAttempts: config.maxAttempts ?? 3, feedbackMs: config.feedbackMs ?? 750 };
+  const value = {
+    ...config,
+    responsePromptMs: config.responsePromptMs ?? 2_500,
+    maxAttempts: config.maxAttempts ?? 3,
+    feedbackMs: config.feedbackMs ?? 750,
+  };
   if (
     !Number.isSafeInteger(value.initialSequenceLength) ||
     value.initialSequenceLength < 1 ||
@@ -98,6 +104,8 @@ function normalizedConfig(config: SequenceMemoryConfig): Required<SequenceMemory
     value.exampleItemMs <= 0 ||
     !Number.isSafeInteger(value.exampleGapMs) ||
     value.exampleGapMs < 0 ||
+    !Number.isSafeInteger(value.responsePromptMs) ||
+    value.responsePromptMs < 0 ||
     !Number.isSafeInteger(value.responseTimeoutMs) ||
     value.responseTimeoutMs <= 0 ||
     !Number.isSafeInteger(value.maxAttempts) ||
@@ -323,8 +331,8 @@ function advance(state: SequenceMemoryState, nowMs: number): SequenceMemoryState
         ...next,
         phase: 'RESPONSE',
         phaseStartedAtMs: boundary,
-        phaseEndsAtMs: boundary + next.config.responseTimeoutMs,
-        attemptStartedAtMs: boundary,
+        phaseEndsAtMs: boundary + next.config.responsePromptMs + next.config.responseTimeoutMs,
+        attemptStartedAtMs: boundary + next.config.responsePromptMs,
         responseIndex: 0,
         firstResponseAtMs: null,
         lastResponseAtMs: null,
@@ -367,7 +375,12 @@ export function inputSequenceMemory(
 ): SequenceMemoryTransition {
   const effectiveNowMs = Math.max(nowMs, state.lastNowMs);
   let next = advance(state, effectiveNowMs);
-  if (next.lifecycle !== 'PLAYING' || next.phase !== 'RESPONSE') return transition(next);
+  if (
+    next.lifecycle !== 'PLAYING' ||
+    next.phase !== 'RESPONSE' ||
+    effectiveNowMs < next.attemptStartedAtMs
+  )
+    return transition(next);
   const firstResponseAtMs = next.firstResponseAtMs ?? effectiveNowMs;
   next = { ...next, firstResponseAtMs };
   if (input === 'MULTIPLE') return transition(failAttempt(next, 'MULTI_BUTTON', effectiveNowMs));
@@ -382,7 +395,12 @@ export function inputSequenceMemory(
 
   const responseIndex = next.responseIndex + 1;
   if (responseIndex < next.sequence.length)
-    return transition({ ...next, responseIndex, feedback: 'CORRECT' });
+    return transition({
+      ...next,
+      responseIndex,
+      phaseEndsAtMs: effectiveNowMs + next.config.responseTimeoutMs,
+      feedback: 'CORRECT',
+    });
 
   next = recordAttempt({ ...next, responseIndex }, 'SUCCESS', effectiveNowMs);
   next = {
