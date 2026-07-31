@@ -46,6 +46,7 @@ const CommandSchema = z
     status: z.enum(['PENDING', 'SENT', 'ACKED', 'NACKED']),
     connectionId: z.string().uuid().nullable(),
     bootId: z.string().uuid().nullable(),
+    lastDispatchedAtMs: z.number().int().nonnegative().default(0),
     nackReason: z.string().max(80).nullable(),
   })
   .strict();
@@ -242,6 +243,7 @@ export async function enqueueMode3Command(
     status: 'PENDING',
     connectionId: null,
     bootId: null,
+    lastDispatchedAtMs: 0,
     nackReason: null,
   });
   const ttlSeconds = Math.max(1, Math.ceil((input.expiresAt.getTime() - Date.now()) / 1_000));
@@ -283,13 +285,18 @@ export async function markMode3CommandDispatched(
   bootId: string,
 ): Promise<Mode3Command | null> {
   const current = decode(await redis.get(commandKey(command.commandId)), CommandSchema);
-  if (!current || current.expiresAtMs <= Date.now() || !['PENDING', 'SENT'].includes(current.status))
+  const now = Date.now();
+  if (!current || current.expiresAtMs <= now || !['PENDING', 'SENT'].includes(current.status))
+    return null;
+  const sameConnection = current.connectionId === connectionId && current.bootId === bootId;
+  if (current.status === 'SENT' && sameConnection && now - current.lastDispatchedAtMs < 1_000)
     return null;
   const updated = CommandSchema.parse({
     ...current,
     status: 'SENT',
     connectionId,
     bootId,
+    lastDispatchedAtMs: now,
   });
   await redis.set(commandKey(updated.commandId), JSON.stringify(updated), 'EX', STATE_TTL_SECONDS);
   return updated;

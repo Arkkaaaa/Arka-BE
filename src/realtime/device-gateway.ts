@@ -39,7 +39,7 @@ import type { AuthoritativeRuntime } from './runtime.js';
 import type { RealtimeDependencies } from './types.js';
 
 const CONNECTION_KEY = 'arka:{mode3}:connection';
-const CONNECTION_TTL_SECONDS = 20;
+const CONNECTION_TTL_SECONDS = 60;
 const COMMAND_POLL_MS = 100;
 export const DEVICE_READINESS_LOW_BATTERY_PERCENT = 30;
 export const DEVICE_INTERRUPT_LOW_BATTERY_PERCENT = 10;
@@ -177,21 +177,19 @@ export class DeviceRealtimeGateway {
     const cleanup = (reason: string): Promise<void> => {
       beginClose();
       if (cleanupPromise) return cleanupPromise;
-      cleanupPromise = processing
-        .then(async () => {
-          if (!connection || connection.closed) return;
-          connection.closed = true;
-          const released = await this.dependencies.redis.eval(
-            RELEASE_CONNECTION_SCRIPT,
-            1,
-            CONNECTION_KEY,
-            connection.connectionId,
-          );
-          if (Number(released) !== 1) return;
-          await writeDeviceReadiness(this.dependencies.redis, offlineMode3Readiness());
-          await this.runtime.interruptMode3(reason);
-        })
-        .finally(() => this.#connections.delete(socketConnection));
+      cleanupPromise = (async () => {
+        if (!connection || connection.closed) return;
+        connection.closed = true;
+        const released = await this.dependencies.redis.eval(
+          RELEASE_CONNECTION_SCRIPT,
+          1,
+          CONNECTION_KEY,
+          connection.connectionId,
+        );
+        if (Number(released) !== 1) return;
+        await writeDeviceReadiness(this.dependencies.redis, offlineMode3Readiness());
+        await this.runtime.interruptMode3(reason);
+      })().finally(() => this.#connections.delete(socketConnection));
       return this.trackCleanup(cleanupPromise);
     };
     const socketConnection: DeviceSocketConnection = { socket, cleanup };
@@ -202,8 +200,18 @@ export class DeviceRealtimeGateway {
         this.dependencies.logger.warn({ err: error }, 'Pemutusan perangkat gagal ditangani'),
       );
     };
-    socket.on('close', disconnected);
-    socket.on('error', () => {
+    socket.on('close', (code, reason) => {
+      this.dependencies.logger.info(
+        { code, reason: reason.toString('utf8'), connectionId: connection?.connectionId ?? null },
+        'Koneksi perangkat ditutup',
+      );
+      disconnected();
+    });
+    socket.on('error', (error) => {
+      this.dependencies.logger.warn(
+        { err: error, connectionId: connection?.connectionId ?? null },
+        'Koneksi perangkat mengalami error',
+      );
       disconnected();
       socket.terminate();
     });

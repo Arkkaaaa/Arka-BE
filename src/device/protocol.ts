@@ -6,7 +6,7 @@ export const DEVICE_MAX_MESSAGE_BYTES = 16 * 1024;
 export const DEVICE_MAX_MESSAGES_PER_SECOND = 25;
 export const DEVICE_MAX_SEQUENCE_GAP = 32;
 export const DEVICE_HEARTBEAT_INTERVAL_MS = 5_000;
-export const DEVICE_STALE_AFTER_MS = 15_000;
+export const DEVICE_STALE_AFTER_MS = 45_000;
 
 const Uuid = z.string().uuid();
 const Sequence = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);

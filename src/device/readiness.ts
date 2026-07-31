@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 const SUPPORTED_DEVICE_FIRMWARE: Readonly<Record<string, true>> = {
   '0.1.0': true,
+  '0.1.1': true,
 };
 
 export const MODE3_DEVICE_ID = 'mode3-primary';
@@ -73,7 +74,7 @@ export const DeviceReadinessSchema = z
   });
 export type DeviceReadiness = z.infer<typeof DeviceReadinessSchema>;
 
-export const DEVICE_READINESS_TTL_SECONDS = 20;
+export const DEVICE_READINESS_TTL_SECONDS = 60;
 
 export function offlineMode3Readiness(): DeviceReadiness {
   return {
