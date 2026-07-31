@@ -12,6 +12,7 @@ export interface SequenceMemoryConfig {
   exampleItemMs: number;
   exampleGapMs: number;
   responseTimeoutMs: number;
+  maxAttempts?: number;
   feedbackMs?: number;
 }
 
@@ -86,7 +87,7 @@ export interface SequenceMemoryTransition {
 }
 
 function normalizedConfig(config: SequenceMemoryConfig): Required<SequenceMemoryConfig> {
-  const value = { ...config, feedbackMs: config.feedbackMs ?? 750 };
+  const value = { ...config, maxAttempts: config.maxAttempts ?? 3, feedbackMs: config.feedbackMs ?? 750 };
   if (
     !Number.isSafeInteger(value.initialSequenceLength) ||
     value.initialSequenceLength < 1 ||
@@ -98,6 +99,8 @@ function normalizedConfig(config: SequenceMemoryConfig): Required<SequenceMemory
     value.exampleGapMs < 0 ||
     !Number.isSafeInteger(value.responseTimeoutMs) ||
     value.responseTimeoutMs <= 0 ||
+    !Number.isSafeInteger(value.maxAttempts) ||
+    value.maxAttempts < 1 ||
     !Number.isSafeInteger(value.feedbackMs) ||
     value.feedbackMs < 0
   ) {
@@ -298,7 +301,9 @@ function failAttempt(
     pendingAction: 'REPEAT',
     feedback: outcome === 'MULTI_BUTTON' ? 'ONE_BUTTON' : 'REPEAT',
   };
-  return next;
+  return next.attemptIndex + 1 >= next.config.maxAttempts
+    ? metricsCompletion(next, 'LIVES_EXHAUSTED')
+    : next;
 }
 
 function advance(state: SequenceMemoryState, nowMs: number): SequenceMemoryState {

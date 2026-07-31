@@ -130,7 +130,8 @@ const SequenceRuleSchema = z
     initialLives: z.number().int().positive().optional(),
     exampleItemMs: z.number().int().positive(),
     exampleGapMs: z.number().int().nonnegative(),
-    responseTimeoutMs: z.literal(10_000),
+    responseTimeoutMs: z.union([z.literal(5_000), z.literal(10_000)]),
+    maxAttempts: z.literal(3).optional(),
     feedbackMs: z.number().int().nonnegative().optional(),
     ownerPresenceGraceMs: z.number().int().positive().optional(),
   })
@@ -1259,6 +1260,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
           exampleItemMs: rule.exampleItemMs,
           exampleGapMs: rule.exampleGapMs,
           responseTimeoutMs: rule.responseTimeoutMs,
+          maxAttempts: rule.maxAttempts ?? 3,
           ...(rule.feedbackMs === undefined ? {} : { feedbackMs: rule.feedbackMs }),
         },
         runtime.seed,
