@@ -11,7 +11,6 @@ import {
 } from '../schemas/index.js';
 import { Prisma } from '../generated/prisma/client.js';
 import { AppError } from '../middleware/errors.js';
-import { ensureInstitutionGameRules } from '../game/rules.js';
 import { writeAudit } from '../services/audit.js';
 import {
   acquireMode3Lock,
@@ -417,7 +416,6 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         'privacy_acknowledgement_required',
         'Persetujuan privasi diperlukan.',
       );
-    await ensureInstitutionGameRules(this.dependencies.prisma, input.institutionId);
     const ruleVersions = await this.dependencies.prisma.gameRuleVersion.findMany({
       where: {
         institutionId: input.institutionId,

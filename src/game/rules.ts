@@ -99,10 +99,12 @@ async function ensureRules(
       data: { isActive: false },
     });
     if (existing) {
-      await transaction.gameRuleVersion.update({
-        where: { id: existing.id },
-        data: { isActive: true, approvedAt: existing.approvedAt ?? new Date() },
-      });
+      if (!existing.isActive || existing.approvedAt === null) {
+        await transaction.gameRuleVersion.update({
+          where: { id: existing.id },
+          data: { isActive: true, approvedAt: existing.approvedAt ?? new Date() },
+        });
+      }
     } else {
       await transaction.gameRuleVersion.create({
         data: {
@@ -116,30 +118,16 @@ async function ensureRules(
   }
 }
 
-export async function ensureInstitutionGameRules(
-  prisma: PrismaClient,
-  institutionId: string,
-): Promise<void> {
-  await prisma.$transaction(async (transaction) => {
-    const institution = await transaction.institution.findFirst({
-      where: { id: institutionId, status: 'ACTIVE' },
-      select: { id: true },
-    });
-    if (!institution) throw new Error(`Active institution not found: ${institutionId}`);
-    await ensureRules(transaction, institution.id);
-  });
-}
-
 export async function ensureAllInstitutionGameRules(prisma: PrismaClient): Promise<number> {
-  return prisma.$transaction(
-    async (transaction) => {
-      const institutions = await transaction.institution.findMany({
-        where: { status: 'ACTIVE' },
-        select: { id: true },
-      });
-      for (const institution of institutions) await ensureRules(transaction, institution.id);
-      return institutions.length;
-    },
-    { isolationLevel: 'Serializable' },
-  );
+  const institutions = await prisma.institution.findMany({
+    where: { status: 'ACTIVE' },
+    select: { id: true },
+  });
+  for (const institution of institutions) {
+    await prisma.$transaction(
+      (transaction) => ensureRules(transaction, institution.id),
+      { timeout: 30_000 },
+    );
+  }
+  return institutions.length;
 }
