@@ -1285,6 +1285,22 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         return this.startPlaying(runtime, durable.startedAt.getTime(), true);
       }
     }
+    if (runtime.mode === 'SEQUENCE_MEMORY') {
+      const rule = SequenceRuleSchema.parse(runtime.config);
+      runtime.engine = createSequenceMemory(
+        {
+          initialSequenceLength: rule.initialSequenceLength,
+          maxSequenceLength: rule.maxSequenceLength ?? 6,
+          exampleItemMs: rule.exampleItemMs,
+          exampleGapMs: rule.exampleGapMs,
+          responseTimeoutMs: rule.responseTimeoutMs,
+          maxAttempts: rule.maxAttempts ?? 3,
+          ...(rule.feedbackMs === undefined ? {} : { feedbackMs: rule.feedbackMs }),
+        },
+        runtime.seed,
+        Date.now(),
+      );
+    }
     runtime.status = 'PLAYING';
     runtime.countdownEndsAtMs = null;
     await this.syncSequenceCue(runtime);
