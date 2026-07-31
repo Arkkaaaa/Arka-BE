@@ -54,9 +54,8 @@ export const GAME_RULES = [
     config: {
       initialSequenceLength: 1,
       maxSequenceLength: 6,
-      initialLives: 2,
-      exampleItemMs: 700,
-      exampleGapMs: 500,
+      exampleItemMs: 900,
+      exampleGapMs: 350,
       responseTimeoutMs: 10_000,
       feedbackMs: 750,
       ownerPresenceGraceMs: OWNER_PRESENCE_GRACE_MS,

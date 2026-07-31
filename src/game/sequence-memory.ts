@@ -9,7 +9,6 @@ export type MemoryAttemptOutcome = 'SUCCESS' | 'WRONG' | 'TIMEOUT' | 'MULTI_BUTT
 export interface SequenceMemoryConfig {
   initialSequenceLength: number;
   maxSequenceLength: number;
-  initialLives: number;
   exampleItemMs: number;
   exampleGapMs: number;
   responseTimeoutMs: number;
@@ -51,7 +50,7 @@ export interface SequenceMemoryState {
   readonly phaseStartedAtMs: number;
   readonly phaseEndsAtMs: number;
   readonly responseIndex: number;
-  readonly lives: number;
+  readonly errorIndex: number | null;
   readonly completedLevels: number;
   readonly maxSequenceLength: number;
   readonly wrongAttempts: number;
@@ -78,7 +77,7 @@ export interface SequenceMemoryTransition {
     activeIndex: number | null;
     sequenceLength: number;
     responseIndex: number;
-    lives: number;
+    errorIndex: number | null;
     feedback: 'CORRECT' | 'REPEAT' | 'ONE_BUTTON' | null;
   };
   readonly completed: EngineCompletion<SequenceMemoryMetrics, SequenceMemoryTrial> | null;
@@ -91,8 +90,6 @@ function normalizedConfig(config: SequenceMemoryConfig): Required<SequenceMemory
     value.initialSequenceLength < 1 ||
     !Number.isSafeInteger(value.maxSequenceLength) ||
     value.maxSequenceLength < value.initialSequenceLength ||
-    !Number.isSafeInteger(value.initialLives) ||
-    value.initialLives <= 0 ||
     !Number.isSafeInteger(value.exampleItemMs) ||
     value.exampleItemMs <= 0 ||
     !Number.isSafeInteger(value.exampleGapMs) ||
@@ -161,7 +158,7 @@ export function createSequenceMemory(
     phaseStartedAtMs: nowMs,
     phaseEndsAtMs: nowMs + exampleDuration(sequence.length, rule),
     responseIndex: 0,
-    lives: rule.initialLives,
+    errorIndex: null,
     completedLevels: 0,
     maxSequenceLength: 0,
     wrongAttempts: 0,
@@ -265,6 +262,7 @@ function beginExample(
     phaseStartedAtMs: nowMs,
     phaseEndsAtMs: nowMs + exampleDuration(sequence.length, state.config),
     responseIndex: 0,
+    errorIndex: null,
     attemptIndex: state.pendingAction === 'REPEAT' ? state.attemptIndex + 1 : 0,
     firstResponseAtMs: null,
     lastResponseAtMs: null,
@@ -290,10 +288,9 @@ function failAttempt(
   nowMs: number,
 ): SequenceMemoryState {
   let next = recordAttempt(state, outcome, nowMs);
-  const lives = next.lives - 1;
   next = {
     ...next,
-    lives,
+    errorIndex: next.responseIndex,
     wrongAttempts: next.wrongAttempts + (outcome === 'TIMEOUT' ? 0 : 1),
     timedOutAttempts: next.timedOutAttempts + (outcome === 'TIMEOUT' ? 1 : 0),
     multiButtonAttempts: next.multiButtonAttempts + (outcome === 'MULTI_BUTTON' ? 1 : 0),
@@ -303,7 +300,7 @@ function failAttempt(
     pendingAction: 'REPEAT',
     feedback: outcome === 'MULTI_BUTTON' ? 'ONE_BUTTON' : 'REPEAT',
   };
-  return lives <= 0 ? metricsCompletion(next, 'LIVES_EXHAUSTED') : next;
+  return next;
 }
 
 function advance(state: SequenceMemoryState, nowMs: number): SequenceMemoryState {
@@ -349,7 +346,7 @@ function transition(state: SequenceMemoryState): SequenceMemoryTransition {
       activeIndex: cue?.index ?? null,
       sequenceLength: state.sequence.length,
       responseIndex: state.responseIndex,
-      lives: state.lives,
+      errorIndex: state.errorIndex,
       feedback: state.feedback,
     },
     completed: state.completion,

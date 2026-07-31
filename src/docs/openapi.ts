@@ -1385,7 +1385,7 @@ export const arkaOpenApi = {
           'activeIndex',
           'sequenceLength',
           'responseIndex',
-          'lives',
+          'errorIndex',
           'feedback',
         ],
         properties: {
@@ -1398,7 +1398,7 @@ export const arkaOpenApi = {
           activeIndex: { type: ['integer', 'null'], minimum: 0, maximum: 5 },
           sequenceLength: { type: 'integer', minimum: 1 },
           responseIndex: { type: 'integer', minimum: 0 },
-          lives: { type: 'integer', minimum: 0, maximum: 2 },
+          errorIndex: { type: ['integer', 'null'], minimum: 0, maximum: 5 },
           feedback: {
             type: ['string', 'null'],
             enum: ['CORRECT', 'REPEAT', 'ONE_BUTTON', null],

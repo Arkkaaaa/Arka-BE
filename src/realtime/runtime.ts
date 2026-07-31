@@ -127,7 +127,7 @@ const SequenceRuleSchema = z
     initialSequenceLength: z.number().int().min(1),
     maxSequenceLength: z.number().int().min(1).max(6).optional(),
     maxCompletedLevels: z.number().int().positive().optional(),
-    initialLives: z.number().int().positive(),
+    initialLives: z.number().int().positive().optional(),
     exampleItemMs: z.number().int().positive(),
     exampleGapMs: z.number().int().nonnegative(),
     responseTimeoutMs: z.literal(10_000),
@@ -1211,14 +1211,14 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     const cueKey = `${runtime.engine.phaseStartedAtMs}:${cue.index}`;
     if (runtime.lastSequenceCueKey === cueKey) return;
     runtime.lastSequenceCueKey = cueKey;
-    const remainingMs = Math.max(1, Math.min(1_000, cue.endsAtMs - Date.now()));
+    const durationMs = Math.min(1_000, runtime.engine.config.exampleItemMs);
     await enqueueMode3Command(this.dependencies.redis, {
       lockId: runtime.lockId,
       associationId: runtime.sessionId,
       sessionId: runtime.sessionId,
       kind: 'FEEDBACK',
-      payload: { action: `LED_${cue.item}`, expiresAfterMs: remainingMs },
-      expiresAt: new Date(cue.endsAtMs),
+      payload: { action: `LED_${cue.item}`, expiresAfterMs: durationMs },
+      expiresAt: new Date(Date.now() + 250),
     });
   }
 
@@ -1256,7 +1256,6 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         {
           initialSequenceLength: rule.initialSequenceLength,
           maxSequenceLength: rule.maxSequenceLength ?? 6,
-          initialLives: rule.initialLives,
           exampleItemMs: rule.exampleItemMs,
           exampleGapMs: rule.exampleGapMs,
           responseTimeoutMs: rule.responseTimeoutMs,

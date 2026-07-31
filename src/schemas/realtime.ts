@@ -58,7 +58,7 @@ export const SessionVisualSchema = z.discriminatedUnion('mode', [
     activeIndex: z.number().int().min(0).max(5).nullable(),
     sequenceLength: z.number().int().min(1),
     responseIndex: z.number().int().nonnegative(),
-    lives: z.number().int().min(0).max(2),
+    errorIndex: z.number().int().min(0).max(5).nullable(),
     feedback: z.enum(['CORRECT', 'REPEAT', 'ONE_BUTTON']).nullable(),
   }),
 ]);
