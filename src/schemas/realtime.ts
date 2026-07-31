@@ -59,6 +59,7 @@ export const SessionVisualSchema = z.discriminatedUnion('mode', [
     cueId: z.string().regex(/^\d+:[0-5]$/).nullable(),
     sequenceLength: z.number().int().min(1),
     responseIndex: z.number().int().nonnegative(),
+    remainingAttempts: z.number().int().min(0).max(3),
     errorIndex: z.number().int().min(0).max(5).nullable(),
     feedback: z.enum(['CORRECT', 'REPEAT', 'ONE_BUTTON']).nullable(),
   }),

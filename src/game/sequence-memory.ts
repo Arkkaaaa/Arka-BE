@@ -80,6 +80,7 @@ export interface SequenceMemoryTransition {
     cueId: string | null;
     sequenceLength: number;
     responseIndex: number;
+    remainingAttempts: number;
     errorIndex: number | null;
     feedback: 'CORRECT' | 'REPEAT' | 'ONE_BUTTON' | null;
   };
@@ -351,6 +352,7 @@ function transition(state: SequenceMemoryState): SequenceMemoryTransition {
       cueId: cue ? `${state.phaseStartedAtMs}:${cue.index}` : null,
       sequenceLength: state.sequence.length,
       responseIndex: state.responseIndex,
+      remainingAttempts: Math.max(0, state.config.maxAttempts - state.attemptIndex),
       errorIndex: state.errorIndex ?? null,
       feedback: state.feedback,
     },

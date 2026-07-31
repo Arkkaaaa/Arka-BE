@@ -1386,6 +1386,7 @@ export const arkaOpenApi = {
           'cueId',
           'sequenceLength',
           'responseIndex',
+          'remainingAttempts',
           'errorIndex',
           'feedback',
         ],
@@ -1400,6 +1401,7 @@ export const arkaOpenApi = {
           cueId: { type: ['string', 'null'], pattern: '^\\d+:[0-5]$' },
           sequenceLength: { type: 'integer', minimum: 1 },
           responseIndex: { type: 'integer', minimum: 0 },
+          remainingAttempts: { type: 'integer', minimum: 0, maximum: 3 },
           errorIndex: { type: ['integer', 'null'], minimum: 0, maximum: 5 },
           feedback: {
             type: ['string', 'null'],
