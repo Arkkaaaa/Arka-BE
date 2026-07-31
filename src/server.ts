@@ -25,6 +25,7 @@ import { SessionActivityService } from './modules/auth/auth.service.js';
 import { createRealtimeAttachment } from './realtime/index.js';
 import { createApiRouter } from './routes/api.js';
 import { createSwaggerRouter } from './routes/swagger.js';
+import { ensureAllInstitutionGameRules } from './game/rules.js';
 import { createAiSummaryWorker } from './workers/ai-summary.js';
 import { createOutboxWorker } from './workers/outbox.js';
 
@@ -147,6 +148,7 @@ async function shutdown(signal: string): Promise<void> {
 async function start(): Promise<void> {
   await connectRedis(redis);
   await prisma.$queryRawUnsafe('SELECT 1');
+  await ensureAllInstitutionGameRules(prisma);
   await realtime.recover();
   sessionActivity.start();
   aiSummaryWorker.start();

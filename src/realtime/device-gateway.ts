@@ -28,13 +28,13 @@ import {
   type DeviceHello,
 } from '../device/protocol.js';
 import {
+  MODE3_DEVICE_ID,
   isDeviceFirmwareCompatible,
   offlineMode3Readiness,
   writeDeviceReadiness,
   type DeviceReadiness,
 } from '../device/readiness.js';
 import { enforceDeviceSequence } from '../device/sequence.js';
-import { MODE3_SINGLETON_KEY } from '../device/mode3-demo.js';
 import type { AuthoritativeRuntime } from './runtime.js';
 import type { RealtimeDependencies } from './types.js';
 
@@ -344,7 +344,7 @@ export class DeviceRealtimeGateway {
           const authenticated = message;
           const decision = await enforceDeviceSequence(
             this.dependencies.redis,
-            MODE3_SINGLETON_KEY,
+            MODE3_DEVICE_ID,
             connection.hello.bootId,
             authenticated,
           );

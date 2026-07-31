@@ -5,6 +5,7 @@ const SUPPORTED_DEVICE_FIRMWARE: Readonly<Record<string, true>> = {
   '0.1.0': true,
 };
 
+export const MODE3_DEVICE_ID = 'mode3-primary';
 export const MODE3_DEVICE_LABEL = 'Arka Ding Dong Dong';
 export const MODE3_READINESS_KEY = 'arka:{mode3}:readiness';
 

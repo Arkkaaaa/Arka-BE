@@ -66,8 +66,6 @@ Buat `.env` dari `.env.example` dan ganti semua nilai contoh.
 | `BETTER_AUTH_URL` | Origin backend untuk Better Auth |
 | `BROWSER_ORIGINS` | Comma-separated exact origins browser |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Optional Google OAuth pair |
-| `DEVICE_CREDENTIAL_KEYS` | JSON keyring credential device berbentuk base64 |
-| `DEVICE_ACTIVE_KEY_VERSION` | Versi key device aktif |
 | `OLLAMA_BASE_URL` | URL privat Ollama |
 | `OLLAMA_MODEL` | Model yang diizinkan |
 | `OLLAMA_MODEL_ALLOWLIST` | Daftar model yang diizinkan |

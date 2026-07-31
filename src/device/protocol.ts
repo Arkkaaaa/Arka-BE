@@ -282,35 +282,3 @@ export function parseDeviceMessage(
   if (!parsed.success) throw new DeviceProtocolError('INVALID_MESSAGE');
   return parsed.data;
 }
-
-const FIXTURE_ID = '018f2f6e-7b23-7f6b-9238-0242ac120002';
-const FIXTURE_BOOT = '018f2f6e-7b23-7f6b-9238-0242ac120004';
-export const DEVICE_PROTOCOL_FIXTURES = Object.freeze({
-  hello: {
-    protocolVersion: 1,
-    type: 'device.hello',
-    messageId: FIXTURE_ID,
-    sentAtMs: 1_721_000_000_000,
-    sequence: 0,
-    bootId: FIXTURE_BOOT,
-    payload: { firmwareVersion: '0.1.0', capabilities: ['FSR_10HZ', 'BUTTONS_4', 'LED'] },
-  },
-  fsr: {
-    protocolVersion: 1,
-    type: 'telemetry.fsr',
-    messageId: FIXTURE_ID,
-    sentAtMs: 1_721_000_000_100,
-    sequence: 1,
-    setupId: FIXTURE_BOOT,
-    payload: { fsrRaw: 1024 },
-  },
-  button: {
-    protocolVersion: 1,
-    type: 'button.press',
-    messageId: FIXTURE_ID,
-    sentAtMs: 1_721_000_000_200,
-    sequence: 2,
-    sessionId: FIXTURE_BOOT,
-    payload: { buttonCode: 'RED' },
-  },
-} as const);

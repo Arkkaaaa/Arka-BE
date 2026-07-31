@@ -1,11 +1,11 @@
 import type { RedisClient } from '../../db/redis.js';
 import { readMode3Lock } from '../../device/commands.js';
 import {
+  MODE3_DEVICE_ID,
   MODE3_DEVICE_LABEL,
   readDeviceReadiness,
   type DeviceReadiness,
 } from '../../device/readiness.js';
-import { MODE3_SINGLETON_KEY } from '../../device/mode3-demo.js';
 
 export interface DeviceRecord {
   readonly deviceId: string;
@@ -32,7 +32,7 @@ export class DeviceRepository {
     return [
       {
         device: {
-          deviceId: MODE3_SINGLETON_KEY,
+          deviceId: MODE3_DEVICE_ID,
           label: MODE3_DEVICE_LABEL,
           inventoryStatus: 'ACTIVE',
           firmwareVersion: readiness.firmwareVersion,

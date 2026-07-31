@@ -17,40 +17,6 @@ const originSchema = z
     return url.origin;
   });
 
-const credentialKeyringSchema = z.string().transform((raw, ctx) => {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    ctx.addIssue({ code: 'custom', message: 'DEVICE_CREDENTIAL_KEYS must be valid JSON' });
-    return z.NEVER;
-  }
-  const record = z.record(z.string().regex(/^[1-9]\d*$/), z.string().min(1)).safeParse(parsed);
-  if (!record.success) {
-    ctx.addIssue({
-      code: 'custom',
-      message: 'DEVICE_CREDENTIAL_KEYS must map positive integer versions to base64 keys',
-    });
-    return z.NEVER;
-  }
-  const keys = new Map<number, Buffer>();
-  for (const [version, encoded] of Object.entries(record.data)) {
-    const key = Buffer.from(encoded, 'base64');
-    if (
-      key.length !== 32 ||
-      key.toString('base64').replace(/=+$/u, '') !== encoded.replace(/=+$/u, '')
-    ) {
-      ctx.addIssue({
-        code: 'custom',
-        message: `Credential key version ${version} must be canonical base64 for exactly 32 bytes`,
-      });
-      return z.NEVER;
-    }
-    keys.set(Number(version), key);
-  }
-  return keys;
-});
-
 const privateOllamaUrlSchema = z
   .string()
   .url()
@@ -130,8 +96,6 @@ const rawEnvSchema = z.object({
   GOOGLE_CLIENT_SECRET: z.string().min(1).optional(),
   BROWSER_ORIGINS: z.string().min(1),
   LOG_LEVEL: z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']).default('info'),
-  DEVICE_CREDENTIAL_KEYS: credentialKeyringSchema,
-  DEVICE_ACTIVE_KEY_VERSION: positiveInt,
   PREPARATION_TTL_MS: positiveInt.default(300_000),
   BINDING_DEADLINE_MS: positiveInt.default(20_000),
   IDEMPOTENCY_TTL_MS: positiveInt.default(86_400_000),
@@ -179,7 +143,6 @@ export type Env = Omit<
 > & {
   readonly browserOrigins: readonly string[];
   readonly googleOAuth: Readonly<{ clientId: string; clientSecret: string }> | null;
-  readonly ollamaModelAllowlist: ReadonlySet<string>;
 };
 
 export function parseEnv(source: NodeJS.ProcessEnv): Env {
@@ -199,9 +162,6 @@ export function parseEnv(source: NodeJS.ProcessEnv): Env {
   );
   if (!ollamaModelAllowlist.has(parsed.OLLAMA_MODEL)) {
     throw new Error('OLLAMA_MODEL must be present in OLLAMA_MODEL_ALLOWLIST');
-  }
-  if (!parsed.DEVICE_CREDENTIAL_KEYS.has(parsed.DEVICE_ACTIVE_KEY_VERSION)) {
-    throw new Error('DEVICE_ACTIVE_KEY_VERSION is missing from DEVICE_CREDENTIAL_KEYS');
   }
   const authOrigin = new URL(parsed.BETTER_AUTH_URL).origin;
   if (parsed.NODE_ENV === 'production' && new URL(parsed.BETTER_AUTH_URL).protocol !== 'https:') {
@@ -240,7 +200,6 @@ export function parseEnv(source: NodeJS.ProcessEnv): Env {
     ...rest,
     browserOrigins: Object.freeze(browserOrigins),
     googleOAuth,
-    ollamaModelAllowlist,
   });
 }
 
