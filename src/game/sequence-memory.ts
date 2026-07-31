@@ -365,25 +365,26 @@ export function inputSequenceMemory(
   input: MemoryInput,
   nowMs: number,
 ): SequenceMemoryTransition {
-  let next = advance(state, nowMs);
+  const effectiveNowMs = Math.max(nowMs, state.lastNowMs);
+  let next = advance(state, effectiveNowMs);
   if (next.lifecycle !== 'PLAYING' || next.phase !== 'RESPONSE') return transition(next);
-  const firstResponseAtMs = next.firstResponseAtMs ?? nowMs;
+  const firstResponseAtMs = next.firstResponseAtMs ?? effectiveNowMs;
   next = { ...next, firstResponseAtMs };
-  if (input === 'MULTIPLE') return transition(failAttempt(next, 'MULTI_BUTTON', nowMs));
+  if (input === 'MULTIPLE') return transition(failAttempt(next, 'MULTI_BUTTON', effectiveNowMs));
   if (input !== next.sequence[next.responseIndex])
-    return transition(failAttempt(next, 'WRONG', nowMs));
+    return transition(failAttempt(next, 'WRONG', effectiveNowMs));
 
   const interButtonMs =
     next.lastResponseAtMs === null
       ? next.interButtonMs
-      : [...next.interButtonMs, nowMs - next.lastResponseAtMs];
-  next = { ...next, lastResponseAtMs: nowMs, interButtonMs };
+      : [...next.interButtonMs, effectiveNowMs - next.lastResponseAtMs];
+  next = { ...next, lastResponseAtMs: effectiveNowMs, interButtonMs };
 
   const responseIndex = next.responseIndex + 1;
   if (responseIndex < next.sequence.length)
     return transition({ ...next, responseIndex, feedback: 'CORRECT' });
 
-  next = recordAttempt({ ...next, responseIndex }, 'SUCCESS', nowMs);
+  next = recordAttempt({ ...next, responseIndex }, 'SUCCESS', effectiveNowMs);
   next = {
     ...next,
     completedLevels: next.completedLevels + 1,
@@ -392,27 +393,28 @@ export function inputSequenceMemory(
   if (next.sequence.length >= next.config.maxSequenceLength)
     return transition(metricsCompletion(next, 'LEVEL_CAP_REACHED'));
   const [sequence, randomState] = appendConstrained(next.sequence, next.randomState);
-  return transition(beginExample(next, nowMs, sequence, randomState));
+  return transition(beginExample(next, effectiveNowMs, sequence, randomState));
 }
 
 export function tickSequenceMemory(
   state: SequenceMemoryState,
   nowMs: number,
 ): SequenceMemoryTransition {
-  return transition(advance(state, nowMs));
+  return transition(advance(state, Math.max(nowMs, state.lastNowMs)));
 }
 
 export function pauseSequenceMemory(
   state: SequenceMemoryState,
   nowMs: number,
 ): SequenceMemoryTransition {
-  const next = advance(state, nowMs);
+  const effectiveNowMs = Math.max(nowMs, state.lastNowMs);
+  const next = advance(state, effectiveNowMs);
   if (next.lifecycle !== 'PLAYING') return transition(next);
   return transition(
     {
       ...next,
       lifecycle: 'PAUSED',
-      pausedRemainingMs: next.phaseEndsAtMs - nowMs,
+      pausedRemainingMs: next.phaseEndsAtMs - effectiveNowMs,
     },
   );
 }
@@ -421,19 +423,19 @@ export function resumeSequenceMemory(
   state: SequenceMemoryState,
   nowMs: number,
 ): SequenceMemoryTransition {
-  assertMonotonic(nowMs, state.lastNowMs);
+  const effectiveNowMs = Math.max(nowMs, state.lastNowMs);
   if (state.lifecycle !== 'PAUSED' || state.pausedRemainingMs === null) {
-    return transition({ ...state, lastNowMs: nowMs });
+    return transition({ ...state, lastNowMs: effectiveNowMs });
   }
   const elapsedInPhase = state.phaseEndsAtMs - state.phaseStartedAtMs - state.pausedRemainingMs;
-  const phaseStartedAtMs = nowMs - elapsedInPhase;
+  const phaseStartedAtMs = effectiveNowMs - elapsedInPhase;
   return transition(
     {
       ...state,
       lifecycle: 'PLAYING',
-      lastNowMs: nowMs,
+      lastNowMs: effectiveNowMs,
       phaseStartedAtMs,
-      phaseEndsAtMs: nowMs + state.pausedRemainingMs,
+      phaseEndsAtMs: effectiveNowMs + state.pausedRemainingMs,
       attemptStartedAtMs: state.phase === 'RESPONSE' ? phaseStartedAtMs : state.attemptStartedAtMs,
       pausedRemainingMs: null,
     },
