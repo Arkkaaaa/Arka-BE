@@ -12,8 +12,22 @@ import {
 import { Prisma } from '../generated/prisma/client.js';
 import { AppError } from '../middleware/errors.js';
 import { writeAudit } from '../services/audit.js';
-import { enqueueDeviceCommand } from '../device/commands.js';
-import { readDeviceReadiness, type DeviceReadiness } from '../device/readiness.js';
+import {
+  acquireMode3Lock,
+  clearMode3Ownership,
+  deleteMode3Association,
+  enqueueMode3Command,
+  readMode3Lock,
+  refreshMode3Lock,
+  transitionMode3Lock,
+  updateMode3AssociationState,
+  writeMode3Association,
+  type Mode3Lock,
+} from '../device/commands.js';
+import {
+  MODE3_DEVICE_LABEL,
+  readDeviceReadiness,
+} from '../device/readiness.js';
 import type { DeviceButtonCodeSchema } from '../device/protocol.js';
 import {
   calibrateGoNoGo,
@@ -48,7 +62,10 @@ import {
   type SequenceMemoryState,
 } from '../game/sequence-memory.js';
 import type { RuntimeDependencies } from './types.js';
-import { MODE3_DEMO_DEVICE_KEY } from '../device/mode3-demo.js';
+import {
+  MODE3_DEMO_HOST_KEY,
+  MODE3_DEMO_RULE_VERSION,
+} from '../device/mode3-demo.js';
 import { RealtimeEventStore } from './events.js';
 
 const COUNTDOWN_MS = 3_000;
@@ -151,7 +168,7 @@ interface PreparationRuntime {
   readonly preparationId: string;
   readonly setupId: string;
   readonly mode: Mode;
-  readonly deviceId: string;
+  readonly lockId: string;
   readonly config: Record<string, unknown>;
   state: 'BINDING_SETUP' | 'CALIBRATING' | 'PRACTICING' | 'READY' | 'CANCELLED' | 'EXPIRED';
   setupBound: boolean;
@@ -402,12 +419,21 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         'Persetujuan privasi diperlukan.',
       );
     const ruleVersions = await this.dependencies.prisma.gameRuleVersion.findMany({
-      where: {
-        institutionId: input.institutionId,
-        mode: input.mode,
-        isActive: true,
-        approvedAt: { not: null },
-      },
+      where:
+        input.mode === 'SEQUENCE_MEMORY'
+          ? {
+              institutionId: MODE3_DEMO_HOST_KEY,
+              mode: 'SEQUENCE_MEMORY',
+              version: MODE3_DEMO_RULE_VERSION,
+              isActive: true,
+              approvedAt: { not: null },
+            }
+          : {
+              institutionId: input.institutionId,
+              mode: input.mode,
+              isActive: true,
+              approvedAt: { not: null },
+            },
       take: 2,
     });
     if (ruleVersions.length !== 1)

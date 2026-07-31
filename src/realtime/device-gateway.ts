@@ -1,15 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import WebSocket, { WebSocketServer, type RawData } from 'ws';
+import { issueDeviceChallenge, verifyDeviceProof } from '../device/authentication.js';
 import {
-  decryptDeviceCredential,
-  issueDeviceChallenge,
-  verifyDeviceProof,
-} from '../device/authentication.js';
-import {
+  acknowledgeMode3Command,
+  clearMode3Ownership,
   commandToWire,
-  expireCommands,
-  markCommandDispatched,
-  type DurableCommandKind,
+  deleteMode3Association,
+  listMode3Commands,
+  markMode3CommandDispatched,
+  readMode3Association,
+  readMode3Lock,
+  releaseMode3Lock,
+  updateMode3AssociationState,
 } from '../device/commands.js';
 import {
   DEVICE_MAX_MESSAGE_BYTES,
@@ -28,25 +30,20 @@ import {
 } from '../device/protocol.js';
 import {
   isDeviceFirmwareCompatible,
+  offlineMode3Readiness,
   writeDeviceReadiness,
   type DeviceReadiness,
 } from '../device/readiness.js';
 import { enforceDeviceSequence } from '../device/sequence.js';
+import { MODE3_SINGLETON_KEY } from '../device/mode3-demo.js';
 import type { AuthoritativeRuntime } from './runtime.js';
 import type { RealtimeDependencies } from './types.js';
-import { MODE3_DEMO_DEVICE_KEY } from '../device/mode3-demo.js';
 
-const DEVICE_CONNECTION_TTL_SECONDS = 20;
-const DEVICE_COMMAND_POLL_MS = 100;
+const CONNECTION_KEY = 'arka:{mode3}:connection';
+const CONNECTION_TTL_SECONDS = 20;
+const COMMAND_POLL_MS = 100;
 export const DEVICE_READINESS_LOW_BATTERY_PERCENT = 30;
 export const DEVICE_INTERRUPT_LOW_BATTERY_PERCENT = 10;
-const COMMAND_KINDS: readonly DurableCommandKind[] = [
-  'SETUP_BIND',
-  'SETUP_UNBIND',
-  'SESSION_BIND',
-  'SESSION_UNBIND',
-  'FEEDBACK',
-];
 const REFRESH_CONNECTION_SCRIPT = `
 if redis.call('GET', KEYS[1]) == ARGV[1] then
   redis.call('EXPIRE', KEYS[1], ARGV[2])
@@ -65,10 +62,10 @@ return 0
 interface AuthenticatedConnection {
   readonly socket: WebSocket;
   readonly hello: DeviceHello;
-  readonly deviceKey: string;
   readonly connectionId: string;
   readonly firmwareCompatible: boolean;
   lastHealthAtMs: number;
+  lastHealth: DeviceHealthPayload;
   dispatching: boolean;
   closed: boolean;
   commandTimer: NodeJS.Timeout;
@@ -80,14 +77,6 @@ interface DeviceSocketConnection {
   readonly cleanup: (reason: string) => Promise<void>;
 }
 
-function rejectedReason(result: PromiseRejectedResult): unknown {
-  return result.reason as unknown;
-}
-
-function connectionKey(deviceId: string): string {
-  return `arka:device:connection:${deviceId}`;
-}
-
 function rawDataBuffer(data: RawData): Buffer {
   if (Buffer.isBuffer(data)) return data;
   if (Array.isArray(data)) return Buffer.concat(data);
@@ -95,14 +84,12 @@ function rawDataBuffer(data: RawData): Buffer {
 }
 
 function send(socket: WebSocket, message: Parameters<typeof encodeDeviceServerMessage>[0]): void {
-  if (socket.readyState !== WebSocket.OPEN) return;
-  socket.send(encodeDeviceServerMessage(message));
+  if (socket.readyState === WebSocket.OPEN) socket.send(encodeDeviceServerMessage(message));
 }
 
 function closeProtocol(socket: WebSocket, reason: string): void {
-  if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+  if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)
     socket.close(4400, reason.slice(0, 123));
-  }
 }
 
 function associationFromUnknown(value: unknown): { setupId?: string; sessionId?: string } {
@@ -116,19 +103,6 @@ function associationFromUnknown(value: unknown): { setupId?: string; sessionId?:
   return {};
 }
 
-function offlineReadiness(): DeviceReadiness {
-  return {
-    connectionStatus: 'OFFLINE',
-    readinessCode: 'OFFLINE',
-    firmwareVersion: null,
-    capabilities: [],
-    batteryPercent: null,
-    lastSeenAt: null,
-    connectionId: null,
-    bootId: null,
-  };
-}
-
 export interface DeviceHealthDecision {
   readonly readinessCode: DeviceReadiness['readinessCode'];
   readonly interruptionReason: 'DEVICE_FAULT' | 'DEVICE_LOW_BATTERY' | null;
@@ -136,7 +110,7 @@ export interface DeviceHealthDecision {
 
 export function decideDeviceHealth(
   health: DeviceHealthPayload,
-  reservationState: 'HELD' | 'RELEASING' | null,
+  lockState: 'HELD' | 'RELEASING' | null,
   firmwareCompatible: boolean,
 ): DeviceHealthDecision {
   const batteryPercent = health.battery.valid ? (health.battery.percent ?? null) : null;
@@ -148,9 +122,9 @@ export function decideDeviceHealth(
         ? 'NOT_READY_BATTERY_UNKNOWN'
         : batteryPercent <= DEVICE_READINESS_LOW_BATTERY_PERCENT
           ? 'NOT_READY_LOW_BATTERY'
-          : reservationState === 'RELEASING'
+          : lockState === 'RELEASING'
             ? 'CLEANUP_PENDING'
-            : reservationState === 'HELD'
+            : lockState === 'HELD'
               ? 'RESERVED'
               : 'READY';
   const interruptionReason =
@@ -167,7 +141,7 @@ export class DeviceRealtimeGateway {
     noServer: true,
     maxPayload: DEVICE_MAX_MESSAGE_BYTES,
     perMessageDeflate: false,
-    handleProtocols: (protocols) => protocols.has(DEVICE_SUBPROTOCOL) ? DEVICE_SUBPROTOCOL : false,
+    handleProtocols: (protocols) => (protocols.has(DEVICE_SUBPROTOCOL) ? DEVICE_SUBPROTOCOL : false),
   });
   readonly #connections = new Set<DeviceSocketConnection>();
   readonly #pendingCleanups = new Set<Promise<void>>();
@@ -176,113 +150,63 @@ export class DeviceRealtimeGateway {
     private readonly runtime: AuthoritativeRuntime,
     private readonly dependencies: RealtimeDependencies,
   ) {
-    this.server.on('connection', (socket) => {
-      try {
-        this.accept(socket);
-      } catch (error) {
-        this.dependencies.logger.warn({ err: error }, 'Koneksi realtime perangkat gagal');
-        socket.close(1011, 'Kesalahan realtime');
-      }
-    });
+    this.server.on('connection', (socket) => this.accept(socket));
   }
 
-  #trackCleanup(cleanup: Promise<void>): Promise<void> {
+  private trackCleanup(cleanup: Promise<void>): Promise<void> {
     this.#pendingCleanups.add(cleanup);
-    void cleanup.then(
-      () => this.#pendingCleanups.delete(cleanup),
-      () => this.#pendingCleanups.delete(cleanup),
-    );
+    void cleanup.finally(() => this.#pendingCleanups.delete(cleanup));
     return cleanup;
   }
 
   private accept(socket: WebSocket): void {
     let hello: DeviceHello | null = null;
-    let device: {
-      credentialCiphertext: Uint8Array;
-      credentialKeyVersion: number;
-    } | null = null;
     let connection: AuthenticatedConnection | null = null;
     let processing = Promise.resolve();
     let closing = false;
     let cleanupPromise: Promise<void> | null = null;
-    let authenticatedCleanupPromise: Promise<void> | null = null;
-    const dispatches = new Set<Promise<void>>();
 
     const beginClose = (): void => {
       if (closing) return;
       closing = true;
-      if (!connection) return;
-      clearInterval(connection.commandTimer);
-      clearInterval(connection.staleTimer);
-    };
-
-    const closeAuthenticated = (reason: string): Promise<void> => {
-      beginClose();
-      if (authenticatedCleanupPromise) return authenticatedCleanupPromise;
-      if (!connection || connection.closed) return Promise.resolve();
-      connection.closed = true;
-      clearInterval(connection.commandTimer);
-      clearInterval(connection.staleTimer);
-      const authenticatedConnection = connection;
-      authenticatedCleanupPromise = this.dependencies.redis
-        .eval(
-          RELEASE_CONNECTION_SCRIPT,
-          1,
-          connectionKey(authenticatedConnection.deviceKey),
-          authenticatedConnection.connectionId,
-        )
-        .then(async (released) => {
-          if (Number(released) !== 1) return;
-          await writeDeviceReadiness(
-            this.dependencies.redis,
-            authenticatedConnection.deviceKey,
-            offlineReadiness(),
-          );
-          await this.runtime.interruptDevice(authenticatedConnection.deviceKey, reason);
-        });
-      return this.#trackCleanup(authenticatedCleanupPromise);
-    };
-
-    const dispatchCommands = (authenticatedConnection: AuthenticatedConnection): Promise<void> => {
-      const dispatch = this.dispatchCommands(authenticatedConnection);
-      dispatches.add(dispatch);
-      void dispatch.then(
-        () => dispatches.delete(dispatch),
-        () => dispatches.delete(dispatch),
-      );
-      return dispatch;
+      if (connection) {
+        clearInterval(connection.commandTimer);
+        clearInterval(connection.staleTimer);
+      }
     };
 
     const cleanup = (reason: string): Promise<void> => {
       beginClose();
       if (cleanupPromise) return cleanupPromise;
-      const processingAtClose = processing;
-      cleanupPromise = processingAtClose
+      cleanupPromise = processing
         .then(async () => {
-          const settled = await Promise.allSettled([...dispatches, closeAuthenticated(reason)]);
-          const failures = settled
-            .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
-            .map(rejectedReason);
-          if (failures.length > 0)
-            throw new AggregateError(failures, 'Device connection cleanup failed');
+          if (!connection || connection.closed) return;
+          connection.closed = true;
+          const released = await this.dependencies.redis.eval(
+            RELEASE_CONNECTION_SCRIPT,
+            1,
+            CONNECTION_KEY,
+            connection.connectionId,
+          );
+          if (Number(released) !== 1) return;
+          await writeDeviceReadiness(this.dependencies.redis, offlineMode3Readiness());
+          await this.runtime.interruptMode3(reason);
+          await clearMode3Ownership(this.dependencies.redis);
         })
         .finally(() => this.#connections.delete(socketConnection));
-      return this.#trackCleanup(cleanupPromise);
+      return this.trackCleanup(cleanupPromise);
     };
     const socketConnection: DeviceSocketConnection = { socket, cleanup };
     this.#connections.add(socketConnection);
 
-    const cleanupAfterDisconnect = (): void => {
-      void cleanup('DEVICE_DISCONNECTED').catch((error) => {
-        this.dependencies.logger.warn(
-          { err: error, deviceId: connection?.deviceKey },
-          'Pemutusan perangkat gagal ditangani',
-        );
-      });
+    const disconnected = (): void => {
+      void cleanup('DEVICE_DISCONNECTED').catch((error) =>
+        this.dependencies.logger.warn({ err: error }, 'Pemutusan perangkat gagal ditangani'),
+      );
     };
-    socket.on('close', cleanupAfterDisconnect);
+    socket.on('close', disconnected);
     socket.on('error', () => {
-      cleanupAfterDisconnect();
+      disconnected();
       socket.terminate();
     });
 
@@ -292,7 +216,7 @@ export class DeviceRealtimeGateway {
         .then(async () => {
           if (closing) return;
           if (isBinary) {
-            if (connection) await closeAuthenticated('MALFORMED_DEVICE_INPUT');
+            await cleanup('MALFORMED_DEVICE_INPUT');
             closeProtocol(socket, 'Pesan biner tidak didukung');
             return;
           }
@@ -301,7 +225,7 @@ export class DeviceRealtimeGateway {
           try {
             parsedUnknown = JSON.parse(encoded.toString('utf8'));
           } catch {
-            if (connection) await closeAuthenticated('MALFORMED_DEVICE_INPUT');
+            await cleanup('MALFORMED_DEVICE_INPUT');
             closeProtocol(socket, 'Format pesan tidak valid');
             return;
           }
@@ -309,37 +233,23 @@ export class DeviceRealtimeGateway {
           try {
             message = parseDeviceMessage(encoded);
           } catch {
-            if (connection) {
+            if (connection)
               await this.runtime.interruptAssociation(
                 associationFromUnknown(parsedUnknown),
                 'MALFORMED_DEVICE_INPUT',
               );
-              await closeAuthenticated('MALFORMED_DEVICE_INPUT');
-            }
+            await cleanup('MALFORMED_DEVICE_INPUT');
             closeProtocol(socket, 'Pesan tidak valid');
             return;
           }
 
           if (!hello) {
             const parsedHello = DeviceHelloSchema.safeParse(message);
-            if (!parsedHello.success) {
-              closeProtocol(socket, 'Hello diperlukan');
-              return;
-            }
-            const stored = await this.dependencies.prisma.device.findFirst({
-              where: {
-                deviceId: MODE3_DEMO_DEVICE_KEY,
-                inventoryStatus: 'ACTIVE',
-                revokedAt: null,
-              },
-              select: { credentialCiphertext: true, credentialKeyVersion: true },
-            });
-            if (!stored) {
+            if (!parsedHello.success || !this.dependencies.env.MODE3_DEVICE_SECRET_BASE64) {
               closeProtocol(socket, 'Identitas perangkat ditolak');
               return;
             }
             hello = parsedHello.data;
-            device = stored;
             const challenge = await issueDeviceChallenge(this.dependencies.redis, hello);
             send(
               socket,
@@ -357,69 +267,51 @@ export class DeviceRealtimeGateway {
 
           if (!connection) {
             const prove = DeviceProveSchema.safeParse(message);
-            if (!prove.success || !device) {
-              closeProtocol(socket, 'Bukti perangkat ditolak');
-              return;
-            }
-            const secret = decryptDeviceCredential(
-              device.credentialCiphertext,
-              device.credentialKeyVersion,
-              this.dependencies.env,
-            );
-            if (!(await verifyDeviceProof(this.dependencies.redis, prove.data, hello, secret))) {
+            const secret = this.dependencies.env.MODE3_DEVICE_SECRET_BASE64;
+            if (
+              !prove.success ||
+              !secret ||
+              !(await verifyDeviceProof(this.dependencies.redis, prove.data, hello, secret))
+            ) {
               closeProtocol(socket, 'Bukti perangkat ditolak');
               return;
             }
             const connectionId = randomUUID();
             const acquired = await this.dependencies.redis.set(
-              connectionKey(MODE3_DEMO_DEVICE_KEY),
+              CONNECTION_KEY,
               connectionId,
               'EX',
-              DEVICE_CONNECTION_TTL_SECONDS,
+              CONNECTION_TTL_SECONDS,
               'NX',
             );
             if (acquired !== 'OK') {
               closeProtocol(socket, 'Perangkat sudah terhubung');
               return;
             }
-            await this.dependencies.prisma.device.update({
-              where: { deviceId: MODE3_DEMO_DEVICE_KEY },
-              data: {
-                lastAuthenticatedAt: new Date(),
-                firmwareVersion: hello.payload.firmwareVersion,
-                capabilitySnapshot: hello.payload.capabilities,
-              },
-            });
             const now = Date.now();
             connection = {
               socket,
               hello,
-              deviceKey: MODE3_DEMO_DEVICE_KEY,
               connectionId,
               firmwareCompatible: isDeviceFirmwareCompatible(hello.payload.firmwareVersion),
               lastHealthAtMs: now,
+              lastHealth: { battery: { valid: false }, faults: [] },
               dispatching: false,
               closed: false,
               commandTimer: setInterval(() => {
                 if (connection)
-                  void dispatchCommands(connection).catch((error) => {
-                    this.dependencies.logger.warn(
-                      { err: error, deviceId: connection?.deviceKey },
-                      'Pengiriman perintah perangkat gagal',
-                    );
-                  });
-              }, DEVICE_COMMAND_POLL_MS),
-              staleTimer: setInterval(() => {
-                if (connection && Date.now() - connection.lastHealthAtMs > DEVICE_STALE_AFTER_MS) {
-                  void closeAuthenticated('DEVICE_HEARTBEAT_TIMEOUT').finally(() =>
-                    socket.terminate(),
+                  void this.dispatchCommands(connection).catch((error) =>
+                    this.dependencies.logger.warn({ err: error }, 'Pengiriman perintah gagal'),
                   );
-                }
+              }, COMMAND_POLL_MS),
+              staleTimer: setInterval(() => {
+                if (connection && Date.now() - connection.lastHealthAtMs > DEVICE_STALE_AFTER_MS)
+                  void cleanup('DEVICE_HEARTBEAT_TIMEOUT').finally(() => socket.terminate());
               }, 1_000),
             };
             connection.commandTimer.unref();
             connection.staleTimer.unref();
-            await writeDeviceReadiness(this.dependencies.redis, connection.deviceKey, {
+            await writeDeviceReadiness(this.dependencies.redis, {
               connectionStatus: connection.firmwareCompatible ? 'ONLINE' : 'CONNECTING',
               readinessCode: connection.firmwareCompatible
                 ? 'NOT_READY_BATTERY_UNKNOWN'
@@ -442,19 +334,19 @@ export class DeviceRealtimeGateway {
                 payload: { connectionId, heartbeatIntervalMs: 5_000, maxSequenceGap: 32 },
               }),
             );
-            await dispatchCommands(connection);
+            await this.dispatchCommands(connection);
             return;
           }
 
           if (message.type === 'device.hello' || message.type === 'device.prove') {
-            await closeAuthenticated('UNEXPECTED_HANDSHAKE_MESSAGE');
+            await cleanup('UNEXPECTED_HANDSHAKE_MESSAGE');
             closeProtocol(socket, 'Pesan handshake tidak diharapkan');
             return;
           }
           const authenticated = message;
           const decision = await enforceDeviceSequence(
             this.dependencies.redis,
-            connection.deviceKey,
+            MODE3_SINGLETON_KEY,
             connection.hello.bootId,
             authenticated,
           );
@@ -464,26 +356,27 @@ export class DeviceRealtimeGateway {
               associationFromUnknown(authenticated),
               `DEVICE_SEQUENCE_${decision}`,
             );
-            await closeAuthenticated(`DEVICE_SEQUENCE_${decision}`);
+            await cleanup(`DEVICE_SEQUENCE_${decision}`);
             closeProtocol(socket, 'Urutan pesan ditolak');
             return;
           }
           const renewed = await this.dependencies.redis.eval(
             REFRESH_CONNECTION_SCRIPT,
             1,
-            connectionKey(connection.deviceKey),
+            CONNECTION_KEY,
             connection.connectionId,
-            String(DEVICE_CONNECTION_TTL_SECONDS),
+            String(CONNECTION_TTL_SECONDS),
           );
           if (Number(renewed) !== 1) {
-            await closeAuthenticated('DEVICE_CONNECTION_FENCED');
+            connection.closed = true;
             socket.terminate();
             return;
           }
 
           if (authenticated.type === 'device.heartbeat' || authenticated.type === 'device.status') {
             connection.lastHealthAtMs = Date.now();
-            await this.updateReadiness(connection, authenticated.payload);
+            connection.lastHealth = authenticated.payload;
+            await this.updateReadiness(connection);
             return;
           }
           if (authenticated.type === 'device.commandAck') {
@@ -492,11 +385,16 @@ export class DeviceRealtimeGateway {
           }
           const association =
             'setupId' in authenticated
-              ? { setupId: authenticated.setupId }
-              : { sessionId: authenticated.sessionId };
-          if (!(await this.associationAllowed(connection.deviceKey, association))) {
-            await this.runtime.interruptAssociation(association, 'INVALID_DEVICE_ASSOCIATION');
-            await closeAuthenticated('INVALID_DEVICE_ASSOCIATION');
+              ? { type: 'SETUP' as const, id: authenticated.setupId }
+              : { type: 'SESSION' as const, id: authenticated.sessionId };
+          if (!(await this.associationAllowed(association.type, association.id))) {
+            await this.runtime.interruptAssociation(
+              association.type === 'SETUP'
+                ? { setupId: association.id }
+                : { sessionId: association.id },
+              'INVALID_DEVICE_ASSOCIATION',
+            );
+            await cleanup('INVALID_DEVICE_ASSOCIATION');
             closeProtocol(socket, 'Asosiasi perangkat ditolak');
             return;
           }
@@ -508,70 +406,39 @@ export class DeviceRealtimeGateway {
             sequence: authenticated.sequence,
             sentAtMs: authenticated.sentAtMs,
           };
-          if (authenticated.type === 'telemetry.fsr') {
-            await this.runtime.handleFsr(association, authenticated.payload.fsrRaw, trustedInput);
-          } else {
-            await this.runtime.handleButton(
-              association,
-              authenticated.payload.buttonCode,
-              trustedInput,
-            );
-          }
+          const target =
+            association.type === 'SETUP'
+              ? { setupId: association.id }
+              : { sessionId: association.id };
+          if (authenticated.type === 'telemetry.fsr')
+            await this.runtime.handleFsr(target, authenticated.payload.fsrRaw, trustedInput);
+          else await this.runtime.handleButton(target, authenticated.payload.buttonCode, trustedInput);
         })
         .catch((error) => {
-          this.dependencies.logger.warn(
-            { err: error, deviceKey: connection?.deviceKey },
-            'Pesan perangkat gagal diproses',
-          );
-          void closeAuthenticated('DEVICE_PROCESSING_ERROR').finally(() => socket.terminate());
+          this.dependencies.logger.warn({ err: error }, 'Pesan perangkat gagal diproses');
+          void cleanup('DEVICE_PROCESSING_ERROR').finally(() => socket.terminate());
         });
     });
   }
 
-  private async associationAllowed(
-    deviceId: string,
-    association: { setupId?: string; sessionId?: string },
-  ): Promise<boolean> {
-    if (association.setupId) {
-      const preparation = await this.dependencies.prisma.gamePreparation.findFirst({
-        where: {
-          setupId: association.setupId,
-          deviceId,
-          state: { in: ['BINDING_SETUP', 'CALIBRATING', 'PRACTICING', 'READY'] },
-          reservation: { holderType: 'PREPARATION', state: 'HELD' },
-        },
-        select: { setupBoundAt: true },
-      });
-      return preparation?.setupBoundAt !== null && preparation?.setupBoundAt !== undefined;
-    }
-    if (!association.sessionId) return false;
-    const session = await this.dependencies.prisma.gameSession.findFirst({
-      where: {
-        id: association.sessionId,
-        deviceId,
-        status: { in: ['COUNTDOWN', 'PLAYING', 'PAUSED'] },
-        reservation: { holderType: 'SESSION', state: 'HELD' },
-      },
-      select: { sessionBoundAt: true },
-    });
-    return session?.sessionBoundAt !== null && session?.sessionBoundAt !== undefined;
+  private async associationAllowed(type: 'SETUP' | 'SESSION', id: string): Promise<boolean> {
+    const [association, lock] = await Promise.all([
+      readMode3Association(this.dependencies.redis, type, id),
+      readMode3Lock(this.dependencies.redis),
+    ]);
+    return association?.state === 'BOUND' && association.lockId === lock?.lockId;
   }
 
-  private async updateReadiness(
-    connection: AuthenticatedConnection,
-    health: DeviceHealthPayload,
-  ): Promise<void> {
-    const reservation = await this.dependencies.prisma.deviceReservation.findUnique({
-      where: { deviceId: connection.deviceKey },
-      select: { state: true },
-    });
+  private async updateReadiness(connection: AuthenticatedConnection): Promise<void> {
+    const lock = await readMode3Lock(this.dependencies.redis);
+    const health = connection.lastHealth;
     const batteryPercent = health.battery.valid ? (health.battery.percent ?? null) : null;
     const decision = decideDeviceHealth(
       health,
-      reservation?.state ?? null,
+      lock?.state ?? null,
       connection.firmwareCompatible,
     );
-    await writeDeviceReadiness(this.dependencies.redis, connection.deviceKey, {
+    await writeDeviceReadiness(this.dependencies.redis, {
       connectionStatus: connection.firmwareCompatible ? 'ONLINE' : 'CONNECTING',
       readinessCode: decision.readinessCode,
       firmwareVersion: connection.hello.payload.firmwareVersion,
@@ -581,9 +448,7 @@ export class DeviceRealtimeGateway {
       connectionId: connection.connectionId,
       bootId: connection.hello.bootId,
     });
-    if (decision.interruptionReason !== null) {
-      await this.runtime.interruptDevice(connection.deviceKey, decision.interruptionReason);
-    }
+    if (decision.interruptionReason) await this.runtime.interruptMode3(decision.interruptionReason);
   }
 
   private async handleAcknowledgement(
@@ -591,44 +456,20 @@ export class DeviceRealtimeGateway {
     message: Extract<AuthenticatedDeviceMessage, { type: 'device.commandAck' }>,
   ): Promise<void> {
     const associationId = 'setupId' in message ? message.setupId : message.sessionId;
-    const command = await this.dependencies.prisma.deviceCommand.findFirst({
-      where: {
-        commandId: message.payload.commandId,
-        deviceId: connection.deviceKey,
-        associationId,
-      },
+    const acknowledged = await acknowledgeMode3Command(this.dependencies.redis, {
+      commandId: message.payload.commandId,
+      associationId,
+      connectionId: connection.connectionId,
+      bootId: connection.hello.bootId,
+      outcome: message.payload.outcome,
+      ...(message.payload.reason ? { reason: message.payload.reason } : {}),
     });
-    const status = message.payload.outcome === 'ACK' ? 'ACKED' : 'NACKED';
-    const generationMismatch =
-      command !== null &&
-      ((command.bootId !== null && command.bootId !== connection.hello.bootId) ||
-        (command.connectionId !== null && command.connectionId !== connection.connectionId));
-    const duplicateOutcomeMatches =
-      command?.status === status &&
-      (status === 'ACKED' || command.nackReason === (message.payload.reason ?? null));
-    if (
-      !command ||
-      generationMismatch ||
-      (!duplicateOutcomeMatches &&
-        (!['PENDING', 'SENT'].includes(command.status) || command.expiresAt <= new Date()))
-    ) {
-      await this.runtime.interruptAssociation(
-        associationFromUnknown(message),
-        'INVALID_COMMAND_ACK',
-      );
+    if (!acknowledged) {
+      await this.runtime.interruptAssociation(associationFromUnknown(message), 'INVALID_COMMAND_ACK');
       throw new Error('ACK perangkat tidak sesuai perintah aktif');
     }
-    if (!duplicateOutcomeMatches) {
-      const updated = await this.dependencies.prisma.deviceCommand.updateMany({
-        where: { id: command.id, status: { in: ['PENDING', 'SENT'] } },
-        data: {
-          status,
-          acknowledgedAt: new Date(),
-          nackReason: message.payload.outcome === 'NACK' ? (message.payload.reason ?? null) : null,
-        },
-      });
-      if (updated.count === 0) return;
-    }
+    if (acknowledged.duplicate) return;
+    const command = acknowledged.command;
     if (message.payload.outcome === 'NACK') {
       await this.runtime.interruptAssociation(
         associationFromUnknown(message),
@@ -637,20 +478,30 @@ export class DeviceRealtimeGateway {
       return;
     }
     if (command.kind === 'SETUP_BIND' && 'setupId' in message) {
+      await updateMode3AssociationState(
+        this.dependencies.redis,
+        'SETUP',
+        message.setupId,
+        command.lockId,
+        'BOUND',
+      );
       await this.runtime.handleSetupBound(message.setupId);
     } else if (command.kind === 'SETUP_UNBIND' && 'setupId' in message) {
+      await deleteMode3Association(this.dependencies.redis, 'SETUP', message.setupId);
       await this.runtime.handleSetupUnbound(message.setupId, command.commandId);
     } else if (command.kind === 'SESSION_BIND' && 'sessionId' in message) {
+      await updateMode3AssociationState(
+        this.dependencies.redis,
+        'SESSION',
+        message.sessionId,
+        command.lockId,
+        'BOUND',
+      );
       await this.runtime.handleSessionBound(message.sessionId);
-    } else if (command.kind === 'SESSION_UNBIND') {
-      await this.dependencies.prisma.deviceReservation.deleteMany({
-        where: {
-          deviceId: connection.deviceKey,
-          state: 'RELEASING',
-          releaseCommandId: command.commandId,
-        },
-      });
-      await this.updateReadiness(connection, { battery: { valid: false }, faults: [] });
+    } else if (command.kind === 'SESSION_UNBIND' && 'sessionId' in message) {
+      await deleteMode3Association(this.dependencies.redis, 'SESSION', message.sessionId);
+      await releaseMode3Lock(this.dependencies.redis, command.lockId);
+      await this.updateReadiness(connection);
     }
   }
 
@@ -663,58 +514,16 @@ export class DeviceRealtimeGateway {
       return;
     connection.dispatching = true;
     try {
-      await expireCommands(this.dependencies.prisma);
-      const commands = await this.dependencies.prisma.deviceCommand.findMany({
-        where: {
-          deviceId: connection.deviceKey,
-          kind: { in: [...COMMAND_KINDS] },
-          status: { in: ['PENDING', 'SENT'] },
-          expiresAt: { gt: new Date() },
-        },
-        orderBy: { sequence: 'asc' },
-        take: 32,
-      });
-      const reservation = await this.dependencies.prisma.deviceReservation.findUnique({
-        where: { deviceId: connection.deviceKey },
-        select: { reservationId: true },
-      });
-      for (const command of commands) {
-        if (
-          command.reservationId !== null &&
-          command.reservationId !== reservation?.reservationId
-        ) {
-          await this.dependencies.prisma.deviceCommand.updateMany({
-            where: { id: command.id, status: { in: ['PENDING', 'SENT'] } },
-            data: { status: 'EXPIRED' },
-          });
-          continue;
-        }
-        let wire;
-        try {
-          wire = commandToWire({
-            commandId: command.commandId,
-            reservationId: command.reservationId,
-            associationId: command.associationId,
-            sessionId: command.sessionId,
-            kind: command.kind,
-            sequence: command.sequence,
-            payload: command.payload,
-            expiresAt: command.expiresAt,
-          });
-        } catch {
-          await this.dependencies.prisma.deviceCommand.updateMany({
-            where: { id: command.id, status: { in: ['PENDING', 'SENT'] } },
-            data: { status: 'EXPIRED' },
-          });
-          continue;
-        }
-        const claimed = await markCommandDispatched(
-          this.dependencies.prisma,
-          command.commandId,
+      const lock = await readMode3Lock(this.dependencies.redis);
+      for (const command of await listMode3Commands(this.dependencies.redis)) {
+        if (!lock || command.lockId !== lock.lockId) continue;
+        const claimed = await markMode3CommandDispatched(
+          this.dependencies.redis,
+          command,
           connection.connectionId,
           connection.hello.bootId,
         );
-        if (claimed.count === 1) send(connection.socket, wire);
+        if (claimed) send(connection.socket, commandToWire(claimed));
       }
     } finally {
       connection.dispatching = false;
@@ -727,13 +536,13 @@ export class DeviceRealtimeGateway {
       connection.socket.terminate();
       return cleanup;
     });
-    const serverClosed = new Promise<void>((resolve, reject) => {
-      this.server.close((error) => (error ? reject(error) : resolve()));
-    });
+    const serverClosed = new Promise<void>((resolve, reject) =>
+      this.server.close((error) => (error ? reject(error) : resolve())),
+    );
     const settled = await Promise.allSettled([...cleanups, ...this.#pendingCleanups, serverClosed]);
     const failures = settled
       .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
-      .map(rejectedReason);
+      .map((result) => result.reason as unknown);
     if (failures.length > 0) throw new AggregateError(failures, 'Device gateway cleanup failed');
   }
 }

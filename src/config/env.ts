@@ -136,6 +136,24 @@ const rawEnvSchema = z.object({
   BINDING_DEADLINE_MS: positiveInt.default(20_000),
   IDEMPOTENCY_TTL_MS: positiveInt.default(86_400_000),
   DEVICE_COMMAND_TTL_MS: positiveInt.default(30_000),
+  MODE3_DEVICE_SECRET_BASE64: z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z
+      .string()
+      .transform((encoded, ctx) => {
+        const secret = Buffer.from(encoded, 'base64');
+        if (
+          secret.length < 32 ||
+          secret.length > 64 ||
+          secret.toString('base64').replace(/=+$/u, '') !== encoded.replace(/=+$/u, '')
+        ) {
+          ctx.addIssue({ code: 'custom', message: 'MODE3_DEVICE_SECRET_BASE64 must be canonical base64 for 32 to 64 bytes' });
+          return z.NEVER;
+        }
+        return secret;
+      })
+      .optional(),
+  ),
   OLLAMA_BASE_URL: privateOllamaUrlSchema,
   OLLAMA_MODEL: z
     .string()

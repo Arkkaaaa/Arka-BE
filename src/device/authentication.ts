@@ -1,48 +1,14 @@
-import {
-  createCipheriv,
-  createDecipheriv,
-  createHmac,
-  randomBytes,
-  randomUUID,
-  timingSafeEqual,
-} from 'node:crypto';
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Redis } from 'ioredis';
-import type { Env } from '../config/env.js';
 import { DEVICE_SUBPROTOCOL, type DeviceHello, type DeviceProve } from './protocol.js';
 
 const CHALLENGE_TTL_SECONDS = 15;
-const CHALLENGE_PREFIX = 'arka:device:challenge:';
+const CHALLENGE_PREFIX = 'arka:{mode3}:challenge:';
 
 export interface DeviceChallengeRecord {
   readonly challengeId: string;
   readonly nonce: string;
   readonly expiresAtMs: number;
-}
-
-export function encryptDeviceCredential(secret: Buffer, keyVersion: number, env: Env): Buffer {
-  const key = env.DEVICE_CREDENTIAL_KEYS.get(keyVersion);
-  if (!key) throw new Error('Versi kunci kredensial perangkat tidak tersedia');
-  const nonce = randomBytes(12);
-  const cipher = createCipheriv('aes-256-gcm', key, nonce);
-  const encrypted = Buffer.concat([cipher.update(secret), cipher.final()]);
-  return Buffer.concat([nonce, cipher.getAuthTag(), encrypted]);
-}
-
-export function decryptDeviceCredential(
-  ciphertext: Uint8Array,
-  keyVersion: number,
-  env: Env,
-): Buffer {
-  const key = env.DEVICE_CREDENTIAL_KEYS.get(keyVersion);
-  const value = Buffer.from(ciphertext);
-  if (!key || value.length < 29) throw new Error('Kredensial perangkat tidak valid');
-  const decipher = createDecipheriv('aes-256-gcm', key, value.subarray(0, 12));
-  decipher.setAuthTag(value.subarray(12, 28));
-  try {
-    return Buffer.concat([decipher.update(value.subarray(28)), decipher.final()]);
-  } catch {
-    throw new Error('Kredensial perangkat tidak valid');
-  }
 }
 
 export async function issueDeviceChallenge(
@@ -81,11 +47,7 @@ export async function verifyDeviceProof(
   const key = `${CHALLENGE_PREFIX}${prove.payload.challengeId}`;
   const encoded = await redis.call('GETDEL', key);
   if (typeof encoded !== 'string') return false;
-  let record: {
-    bootId: string;
-    nonce: string;
-    expiresAtMs: number;
-  };
+  let record: { bootId: string; nonce: string; expiresAtMs: number };
   try {
     record = JSON.parse(encoded) as typeof record;
   } catch {

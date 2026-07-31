@@ -5,6 +5,9 @@ const SUPPORTED_DEVICE_FIRMWARE: Readonly<Record<string, true>> = {
   '0.1.0': true,
 };
 
+export const MODE3_DEVICE_LABEL = 'Arka Ding Dong Dong';
+export const MODE3_READINESS_KEY = 'arka:{mode3}:readiness';
+
 export function isDeviceFirmwareCompatible(firmwareVersion: string): boolean {
   return SUPPORTED_DEVICE_FIRMWARE[firmwareVersion] === true;
 }
@@ -18,7 +21,6 @@ export const DeviceConnectionStatusSchema = z.enum([
 export const DeviceReadinessCodeSchema = z.enum([
   'READY',
   'OFFLINE',
-  'NOT_ACTIVE',
   'NOT_COMPATIBLE',
   'RESERVED',
   'CLEANUP_PENDING',
@@ -72,29 +74,8 @@ export type DeviceReadiness = z.infer<typeof DeviceReadinessSchema>;
 
 export const DEVICE_READINESS_TTL_SECONDS = 20;
 
-export function readinessRedisKey(deviceId: string): string {
-  return `arka:device:readiness:${deviceId}`;
-}
-
-export async function writeDeviceReadiness(
-  redis: Redis,
-  deviceId: string,
-  readiness: DeviceReadiness,
-): Promise<void> {
-  const value = DeviceReadinessSchema.parse(readiness);
-  await redis.set(
-    readinessRedisKey(deviceId),
-    JSON.stringify(value),
-    'EX',
-    DEVICE_READINESS_TTL_SECONDS,
-  );
-}
-
-export async function readDeviceReadiness(
-  redis: Redis,
-  deviceId: string,
-): Promise<DeviceReadiness> {
-  const offline: DeviceReadiness = {
+export function offlineMode3Readiness(): DeviceReadiness {
+  return {
     connectionStatus: 'OFFLINE',
     readinessCode: 'OFFLINE',
     firmwareVersion: null,
@@ -104,17 +85,33 @@ export async function readDeviceReadiness(
     connectionId: null,
     bootId: null,
   };
+}
+
+export async function writeDeviceReadiness(
+  redis: Redis,
+  readiness: DeviceReadiness,
+): Promise<void> {
+  const value = DeviceReadinessSchema.parse(readiness);
+  await redis.set(
+    MODE3_READINESS_KEY,
+    JSON.stringify(value),
+    'EX',
+    DEVICE_READINESS_TTL_SECONDS,
+  );
+}
+
+export async function readDeviceReadiness(redis: Redis): Promise<DeviceReadiness> {
   let stored: string | null;
   try {
-    stored = await redis.get(readinessRedisKey(deviceId));
+    stored = await redis.get(MODE3_READINESS_KEY);
   } catch {
-    return offline;
+    return offlineMode3Readiness();
   }
-  if (!stored) return offline;
+  if (!stored) return offlineMode3Readiness();
   try {
     const parsed: unknown = JSON.parse(stored);
     return DeviceReadinessSchema.parse(parsed);
   } catch {
-    return offline;
+    return offlineMode3Readiness();
   }
 }

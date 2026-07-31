@@ -17,22 +17,6 @@ enum ParticipantStatus {
   INACTIVE
 }
 
-enum DeviceInventoryStatus {
-  ACTIVE
-  RETIRED
-  REVOKED
-}
-
-enum ReservationHolderType {
-  PREPARATION
-  SESSION
-}
-
-enum ReservationState {
-  HELD
-  RELEASING
-}
-
 enum GameMode {
   MOTOR_GRIP
   GO_NO_GO
@@ -70,22 +54,6 @@ enum AiSummaryStatus {
   UNAVAILABLE
 }
 
-enum CommandKind {
-  SETUP_BIND
-  SETUP_UNBIND
-  SESSION_BIND
-  SESSION_UNBIND
-  FEEDBACK
-}
-
-enum CommandStatus {
-  PENDING
-  SENT
-  ACKED
-  NACKED
-  EXPIRED
-}
-
 enum OutboxStatus {
   PENDING
   PROCESSING
@@ -101,7 +69,6 @@ model Institution {
   updatedAt    DateTime          @updatedAt
   user         User?
   participants Participant[]
-  devices      Device[]
   rules        GameRuleVersion[]
   preparations GamePreparation[]
   sessions     GameSession[]
@@ -190,47 +157,6 @@ model Participant {
   @@index([institutionId, status])
 }
 
-model Device {
-  deviceId                    String                @id @db.VarChar(80)
-  institutionId               String                @db.Uuid
-  institution                 Institution           @relation(fields: [institutionId], references: [id], onDelete: Restrict)
-  label                       String                @db.VarChar(100)
-  inventoryStatus             DeviceInventoryStatus @default(ACTIVE)
-  credentialCiphertext        Bytes
-  credentialKeyVersion        Int                   @default(1)
-  firmwareVersion             String?               @db.VarChar(80)
-  capabilitySnapshot          Json                  @default("[]")
-  provisionedAt               DateTime              @default(now())
-  credentialRotatedAt         DateTime?
-  revokedAt                   DateTime?
-  lastAuthenticatedAt         DateTime?
-  reservation                DeviceReservation?
-  preparations               GamePreparation[]
-  sessions                   GameSession[]
-  commands                   DeviceCommand[]
-
-  @@index([institutionId, inventoryStatus])
-  @@unique([deviceId, institutionId], map: "Device_tenant_identity_key")
-}
-
-model DeviceReservation {
-  deviceId         String                @id @db.VarChar(80)
-  device           Device                @relation(fields: [deviceId], references: [deviceId], onDelete: Cascade)
-  reservationId    String                @unique @db.Uuid
-  institutionId    String                @db.Uuid
-  holderType       ReservationHolderType
-  preparationId    String?               @unique @db.Uuid
-  preparation      GamePreparation?      @relation(fields: [preparationId], references: [id], onDelete: Restrict)
-  sessionId        String?               @unique @db.Uuid
-  session          GameSession?          @relation(fields: [sessionId], references: [id], onDelete: Restrict)
-  state             ReservationState     @default(HELD)
-  releaseCommandId String?               @unique @db.Uuid
-  acquiredAt       DateTime              @default(now())
-  updatedAt        DateTime              @updatedAt
-
-  @@index([institutionId, state])
-}
-
 model GameRuleVersion {
   id            String      @id @default(uuid()) @db.Uuid
   institutionId String      @db.Uuid
@@ -246,7 +172,7 @@ model GameRuleVersion {
   results       GameResult[]
 
   @@unique([institutionId, mode, version])
-  @@unique([id, institutionId, mode], map: "GameRuleVersion_tenant_mode_key")
+  @@unique([id, mode], map: "GameRuleVersion_mode_key")
   @@index([institutionId, mode, isActive])
 }
 
@@ -262,8 +188,6 @@ model GamePreparation {
   displayNameSnapshot   String           @db.VarChar(100)
   participantRefSnapshot String?         @db.VarChar(64)
   mode                  GameMode
-  deviceId              String           @db.VarChar(80)
-  device                Device           @relation(fields: [deviceId], references: [deviceId], onDelete: Restrict)
   ruleVersionId         String           @db.Uuid
   ruleVersion           GameRuleVersion  @relation(fields: [ruleVersionId], references: [id], onDelete: Restrict)
   configSnapshot        Json
@@ -279,13 +203,11 @@ model GamePreparation {
   cancelledAt           DateTime?
   createdAt             DateTime         @default(now())
   updatedAt             DateTime         @updatedAt
-  reservation           DeviceReservation?
   sessions              GameSession[]
 
   @@index([institutionId, ownerSessionId, state])
   @@index([expiresAt, state])
-  @@unique([id, institutionId, deviceId], map: "GamePreparation_tenant_device_key")
-  @@unique([id, institutionId, deviceId, mode, ruleVersionId, ownerSessionId], map: "GamePreparation_session_source_key")
+  @@unique([id, institutionId, mode, ruleVersionId, ownerSessionId], map: "GamePreparation_session_source_key")
 }
 
 model SessionCreationRequest {
@@ -314,9 +236,6 @@ model GameSession {
   preparation                  GamePreparation   @relation(fields: [preparationId], references: [id], onDelete: Restrict)
   displayNameSnapshot          String            @db.VarChar(100)
   mode                         GameMode
-  deviceId                     String            @db.VarChar(80)
-  device                       Device            @relation(fields: [deviceId], references: [deviceId], onDelete: Restrict)
-  reservationId               String            @db.Uuid
   ruleVersionId                String            @db.Uuid
   ruleVersion                  GameRuleVersion   @relation(fields: [ruleVersionId], references: [id], onDelete: Restrict)
   configSnapshot               Json
@@ -343,17 +262,14 @@ model GameSession {
   finalizationFailedAt         DateTime?
   createdAt                    DateTime           @default(now())
   updatedAt                    DateTime           @updatedAt
-  reservation                 DeviceReservation?
   creationRequest             SessionCreationRequest?
   result                       GameResult?
   trials                       GameTrial[]
   aiSummary                    AiSessionSummary?
-  commands                     DeviceCommand[]
 
   @@index([institutionId, participantId, completedAt])
   @@index([status, finalizationRecoveryExpiresAt])
   @@index([ownerSessionId, status])
-  @@unique([id, institutionId, deviceId, reservationId], map: "GameSession_reservation_holder_key")
   @@unique([id, institutionId, mode, ruleVersionId], map: "GameSession_result_source_key")
 }
 
@@ -413,32 +329,6 @@ model AiSessionSummary {
   updatedAt      DateTime        @updatedAt
 
   @@index([status, availableAt, leaseExpiresAt])
-}
-
-model DeviceCommand {
-  id                String        @id @default(uuid()) @db.Uuid
-  commandId         String        @unique @db.Uuid
-  deviceId          String        @db.VarChar(80)
-  device            Device        @relation(fields: [deviceId], references: [deviceId], onDelete: Restrict)
-  reservationId     String?       @db.Uuid
-  sessionId         String?       @db.Uuid
-  session           GameSession?  @relation(fields: [sessionId], references: [id], onDelete: Restrict)
-  associationId     String?       @db.Uuid
-  kind              CommandKind
-  sequence          BigInt
-  connectionId      String?       @db.Uuid
-  bootId            String?       @db.Uuid
-  status            CommandStatus @default(PENDING)
-  payload            Json
-  expiresAt          DateTime
-  sentAt             DateTime?
-  acknowledgedAt     DateTime?
-  nackReason         String?       @db.VarChar(80)
-  createdAt          DateTime      @default(now())
-
-  @@unique([deviceId, sequence])
-  @@index([deviceId, status, expiresAt])
-  @@index([sessionId])
 }
 
 model AuditLog {
