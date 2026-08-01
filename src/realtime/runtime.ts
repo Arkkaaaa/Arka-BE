@@ -435,6 +435,45 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       throw new AppError(409, 'game_rule_unavailable', 'Aturan permainan belum tersedia.');
     const rule = ruleVersions[0]!;
     const config = parseRule(input.mode, rule.config);
+    const activePreparation = await this.dependencies.prisma.gamePreparation.findFirst({
+      where: {
+        institutionId: input.institutionId,
+        ownerSessionId: input.ownerSessionId,
+        mode: input.mode,
+        state: { in: ['BINDING_SETUP', 'CALIBRATING', 'PRACTICING', 'READY'] },
+        expiresAt: { gt: new Date() },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (activePreparation) {
+      const runtime = await this.loadPreparation(activePreparation.setupId);
+      const lock = await readMode3Lock(this.dependencies.redis);
+      if (
+        runtime &&
+        lock?.holderType === 'PREPARATION' &&
+        lock.preparationId === activePreparation.preparationId &&
+        lock.setupId === activePreparation.setupId
+      ) {
+        const readiness = await readDeviceReadiness(this.dependencies.redis);
+        return PreparationDtoSchema.parse({
+          preparationId: activePreparation.preparationId,
+          setupId: activePreparation.setupId,
+          mode: activePreparation.mode,
+          displayName: activePreparation.displayNameSnapshot,
+          state: activePreparation.state,
+          expiresAt: activePreparation.expiresAt.toISOString(),
+          device: {
+            deviceId: MODE3_DEVICE_ID,
+            label: MODE3_DEVICE_LABEL,
+            readinessCode: readiness.readinessCode,
+          },
+          setupBound: runtime.setupBound,
+          calibration: null,
+          practiceCompleted: activePreparation.state === 'READY',
+          canStart: activePreparation.state === 'READY',
+        });
+      }
+    }
     const readiness = await readDeviceReadiness(this.dependencies.redis);
     if (
       readiness.readinessCode !== 'READY' ||
