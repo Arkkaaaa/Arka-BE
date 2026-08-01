@@ -35,6 +35,7 @@ export class AuthController {
         );
       }
 
+      res.setHeader('Cache-Control', 'no-store');
       res.json(
         MeDtoSchema.parse({
           user: {

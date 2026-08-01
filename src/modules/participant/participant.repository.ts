@@ -8,6 +8,8 @@ export interface ParticipantRecord {
   readonly participantId: string;
   readonly displayName: string;
   readonly image: string | null;
+  readonly dateOfBirth: Date | null;
+  readonly gender: 'MALE' | 'FEMALE' | null;
   readonly participantReference: string;
   readonly status: 'ACTIVE' | 'INACTIVE';
   readonly createdAt: Date;
@@ -17,6 +19,8 @@ export interface ParticipantRecord {
 export interface ParticipantUpdateData {
   readonly displayName?: string | undefined;
   readonly image?: string | null | undefined;
+  readonly dateOfBirth?: Date | null | undefined;
+  readonly gender?: 'MALE' | 'FEMALE' | null | undefined;
   readonly normalizedName?: string | undefined;
   readonly participantReference?: string | undefined;
   readonly status?: 'ACTIVE' | 'INACTIVE' | undefined;
@@ -164,6 +168,8 @@ export class ParticipantRepository {
       readonly displayName: string;
       readonly normalizedName: string;
       readonly participantReference: string;
+      readonly dateOfBirth?: Date | null;
+      readonly gender?: 'MALE' | 'FEMALE' | null;
     },
   ): Promise<ParticipantRecord> {
     return this.prisma.$transaction(async (transaction) => {
@@ -174,6 +180,8 @@ export class ParticipantRepository {
           participantReference: input.participantReference,
           displayName: input.displayName,
           normalizedName: input.normalizedName,
+          dateOfBirth: input.dateOfBirth ?? null,
+          gender: input.gender ?? null,
         },
       });
       await writeAudit(transaction, context, {
@@ -202,6 +210,8 @@ export class ParticipantRepository {
         data: {
             ...(changes.displayName === undefined ? {} : { displayName: changes.displayName }),
             ...(changes.image === undefined ? {} : { image: changes.image }),
+            ...(changes.dateOfBirth === undefined ? {} : { dateOfBirth: changes.dateOfBirth }),
+            ...(changes.gender === undefined ? {} : { gender: changes.gender }),
             ...(changes.normalizedName === undefined
             ? {}
             : { normalizedName: changes.normalizedName }),

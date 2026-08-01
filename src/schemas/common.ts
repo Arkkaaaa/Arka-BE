@@ -18,6 +18,9 @@ export const SessionStatusSchema = z.enum([
 export type SessionStatus = z.infer<typeof SessionStatusSchema>;
 
 export const ParticipantStatusSchema = z.enum(['ACTIVE', 'INACTIVE']);
+export const ParticipantGenderSchema = z.enum(['MALE', 'FEMALE']);
+export type ParticipantGender = z.infer<typeof ParticipantGenderSchema>;
+export const DateOnlySchema = z.string().date();
 export const DeviceInventoryStatusSchema = z.enum(['ACTIVE', 'RETIRED', 'REVOKED']);
 export const DeviceConnectionStatusSchema = z.enum([
   'ONLINE',

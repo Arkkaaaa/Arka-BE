@@ -3,9 +3,11 @@ import {
   DeviceConnectionStatusSchema,
   DeviceInventoryStatusSchema,
   DeviceReadinessCodeSchema,
+  DateOnlySchema,
   DisplayNameSchema,
   GameModeSchema,
   IsoDateSchema,
+  ParticipantGenderSchema,
   ParticipantReferenceSchema,
   ParticipantStatusSchema,
   PublicIdSchema,
@@ -101,6 +103,8 @@ export const ParticipantDtoSchema = z.object({
   participantId: PublicIdSchema,
   displayName: DisplayNameSchema,
   image: ProfileImageSchema.nullable(),
+  dateOfBirth: DateOnlySchema.nullable(),
+  gender: ParticipantGenderSchema.nullable(),
   participantReference: ParticipantReferenceSchema,
   status: ParticipantStatusSchema,
   createdAt: IsoDateSchema,
@@ -157,11 +161,13 @@ export const ParticipantSearchQuerySchema = z.object({
   query: z.string().trim().max(100).default(''),
 });
 export const ParticipantSearchResponseSchema = z.array(ParticipantDtoSchema).max(20);
-export const CreateParticipantRequestSchema = z.object({ displayName: DisplayNameSchema });
+export const CreateParticipantRequestSchema = z.object({ displayName: DisplayNameSchema, dateOfBirth: DateOnlySchema.nullable().optional(), gender: ParticipantGenderSchema.nullable().optional() });
 export const UpdateParticipantRequestSchema = z
   .object({
     displayName: DisplayNameSchema.optional(),
     image: ProfileImageSchema.nullable().optional(),
+    dateOfBirth: DateOnlySchema.nullable().optional(),
+    gender: ParticipantGenderSchema.nullable().optional(),
     participantReference: ParticipantReferenceSchema.optional(),
     status: ParticipantStatusSchema.optional(),
   })
@@ -216,6 +222,9 @@ export const DashboardProgressDtoSchema = z.object({
     z.object({
       participantId: PublicIdSchema,
       displayName: DisplayNameSchema,
+      image: ProfileImageSchema.nullable(),
+      dateOfBirth: DateOnlySchema.nullable(),
+      gender: ParticipantGenderSchema.nullable(),
       savedSessionsTotal: z.number().int().nonnegative(),
       sessionsLast7Days: z.number().int().nonnegative(),
       activeWeeksLast4: z.number().int().min(0).max(4),

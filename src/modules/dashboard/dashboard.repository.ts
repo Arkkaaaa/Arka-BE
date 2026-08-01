@@ -6,6 +6,9 @@ export interface DashboardProgressRecord {
   readonly participants: readonly {
     readonly participantId: string;
     readonly displayName: string;
+    readonly image: string | null;
+    readonly dateOfBirth: Date | null;
+    readonly gender: 'MALE' | 'FEMALE' | null;
     readonly savedSessionsTotal: number;
     readonly sessionsLast7Days: number;
     readonly activeWeeksLast4: number;
@@ -97,7 +100,7 @@ export class DashboardRepository {
     const participants = await this.prisma.participant.findMany({
       where: { institutionId, status: 'ACTIVE' },
       orderBy: [{ normalizedName: 'asc' }, { participantId: 'asc' }],
-      select: { id: true, participantId: true, displayName: true },
+      select: { id: true, participantId: true, displayName: true, image: true, dateOfBirth: true, gender: true },
     });
 
     return {
@@ -153,6 +156,9 @@ export class DashboardRepository {
           return {
             participantId: participant.participantId,
             displayName: participant.displayName,
+            image: participant.image,
+            dateOfBirth: participant.dateOfBirth,
+            gender: participant.gender,
             savedSessionsTotal,
             sessionsLast7Days,
             activeWeeksLast4: activeWeeks.size,

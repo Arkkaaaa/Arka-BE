@@ -72,6 +72,9 @@ export class DashboardService {
         return {
           participantId: participant.participantId,
           displayName: participant.displayName,
+          image: participant.image,
+          dateOfBirth: participant.dateOfBirth?.toISOString().slice(0, 10) ?? null,
+          gender: participant.gender,
           savedSessionsTotal: participant.savedSessionsTotal,
           sessionsLast7Days: participant.sessionsLast7Days,
           activeWeeksLast4: participant.activeWeeksLast4,

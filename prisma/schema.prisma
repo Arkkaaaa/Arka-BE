@@ -17,6 +17,11 @@ enum ParticipantStatus {
   INACTIVE
 }
 
+enum ParticipantGender {
+  MALE
+  FEMALE
+}
+
 enum GameMode {
   MOTOR_GRIP
   GO_NO_GO
@@ -145,6 +150,8 @@ model Participant {
   participantReference String            @db.VarChar(64)
   displayName          String            @db.VarChar(100)
   image                String?           @db.VarChar(48000)
+  dateOfBirth          DateTime?         @db.Date
+  gender               ParticipantGender?
   normalizedName       String            @db.VarChar(100)
   status               ParticipantStatus @default(ACTIVE)
   createdAt            DateTime          @default(now())

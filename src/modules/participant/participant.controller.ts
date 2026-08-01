@@ -39,7 +39,7 @@ export class ParticipantController {
   public readonly create: RequestHandler = async (req, res) => {
     const body = CreateParticipantRequestSchema.parse(req.body);
     res.status(201).json(
-      await this.service.createParticipant(participantScope(req), body.displayName),
+      await this.service.createParticipant(participantScope(req), body),
     );
   };
 
@@ -51,6 +51,7 @@ export class ParticipantController {
   };
 
   public readonly get: RequestHandler = async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
     const params = ParticipantParamsSchema.parse(req.params);
     res.json(
       await this.service.getParticipant(authContext(req).institutionId, params.participantId),

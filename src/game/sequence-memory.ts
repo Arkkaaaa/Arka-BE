@@ -284,8 +284,8 @@ function beginExample(
     sequence,
     randomState,
     phase: 'EXAMPLE',
-    phaseStartedAtMs: nowMs,
-    phaseEndsAtMs: nowMs + exampleDuration(sequence.length, state.config),
+    phaseStartedAtMs: nowMs + state.config.initialDelayMs,
+    phaseEndsAtMs: nowMs + state.config.initialDelayMs + exampleDuration(sequence.length, state.config),
     responseIndex: 0,
     errorIndex: null,
     attemptIndex: state.pendingAction === 'REPEAT' ? state.attemptIndex + 1 : 0,
@@ -342,8 +342,8 @@ function advance(state: SequenceMemoryState, nowMs: number): SequenceMemoryState
         ...next,
         phase: 'RESPONSE',
         phaseStartedAtMs: boundary,
-        phaseEndsAtMs: boundary + next.config.responsePromptMs + next.config.responseTimeoutMs,
-        attemptStartedAtMs: boundary + next.config.responsePromptMs,
+        phaseEndsAtMs: boundary + next.config.responseTimeoutMs,
+        attemptStartedAtMs: boundary,
         responseIndex: 0,
         firstResponseAtMs: null,
         lastResponseAtMs: null,
@@ -409,7 +409,6 @@ export function inputSequenceMemory(
     return transition({
       ...next,
       responseIndex,
-      phaseEndsAtMs: effectiveNowMs + next.config.responseTimeoutMs,
       feedback: 'CORRECT',
     });
 

@@ -440,6 +440,8 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         institutionId: input.institutionId,
         ownerSessionId: input.ownerSessionId,
         mode: input.mode,
+        displayNameSnapshot: input.displayName,
+        participantRefSnapshot: input.participantReference ?? null,
         state: { in: ['BINDING_SETUP', 'CALIBRATING', 'PRACTICING', 'READY'] },
         expiresAt: { gt: new Date() },
       },
@@ -1031,6 +1033,12 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     )
       return;
     runtime.lastInput = input;
+    if (buttonCode === 'MULTIPLE') {
+      runtime.checkedButton = null;
+      await this.savePreparation(runtime);
+      await this.publishPreparation(runtime);
+      return;
+    }
     runtime.checkedButton = buttonCode;
     runtime.state = 'READY';
     const updated = await this.dependencies.prisma.gamePreparation.updateMany({
@@ -1938,7 +1946,9 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       runtime.state === 'BINDING_SETUP'
         ? 'Menghubungkan perangkat.'
         : runtime.state === 'CALIBRATING'
-          ? 'Ikuti petunjuk kalibrasi dengan nyaman.'
+          ? runtime.mode === 'SEQUENCE_MEMORY'
+            ? 'Tekan satu tombol untuk memastikan perangkat merespons.'
+            : 'Ikuti petunjuk kalibrasi dengan nyaman.'
           : runtime.state === 'PRACTICING'
             ? 'Latihan: genggam hanya saat Wayang muncul.'
             : runtime.state === 'READY'

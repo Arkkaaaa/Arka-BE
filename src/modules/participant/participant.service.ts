@@ -41,6 +41,8 @@ export interface ParticipantIdentityInput {
 export interface ParticipantChanges {
   readonly displayName?: string | undefined;
   readonly image?: string | null | undefined;
+  readonly dateOfBirth?: string | null | undefined;
+  readonly gender?: 'MALE' | 'FEMALE' | null | undefined;
   readonly participantReference?: string | undefined;
   readonly status?: 'ACTIVE' | 'INACTIVE' | undefined;
 }
@@ -56,6 +58,8 @@ function participantDto(participant: ParticipantRecord): ParticipantDto {
     participantId: participant.participantId,
     displayName: participant.displayName,
     image: participant.image,
+    dateOfBirth: participant.dateOfBirth?.toISOString().slice(0, 10) ?? null,
+    gender: participant.gender,
     participantReference: participant.participantReference,
     status: participant.status,
     createdAt: participant.createdAt.toISOString(),
@@ -155,15 +159,17 @@ export class ParticipantService {
 
   public async createParticipant(
     scope: ParticipantScope,
-    displayName: string,
+    input: { readonly displayName: string; readonly dateOfBirth?: string | null | undefined; readonly gender?: 'MALE' | 'FEMALE' | null | undefined },
   ): Promise<ParticipantDto> {
-    const normalizedName = normalizeDisplayName(displayName);
+    const normalizedName = normalizeDisplayName(input.displayName);
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         const participant = await this.repository.createWithAudit(scope, {
-          displayName,
+          displayName: input.displayName,
           normalizedName,
           participantReference: `AUTO-${randomBytes(9).toString('base64url')}`,
+          dateOfBirth: input.dateOfBirth ? new Date(`${input.dateOfBirth}T00:00:00.000Z`) : null,
+          gender: input.gender ?? null,
         });
         return participantDto(participant);
       } catch (error) {
@@ -211,6 +217,8 @@ export class ParticipantService {
             normalizedName: normalizeDisplayName(changes.displayName),
           }),
        ...(changes.image === undefined ? {} : { image: changes.image }),
+       ...(changes.dateOfBirth === undefined ? {} : { dateOfBirth: changes.dateOfBirth ? new Date(`${changes.dateOfBirth}T00:00:00.000Z`) : null }),
+       ...(changes.gender === undefined ? {} : { gender: changes.gender }),
        ...(changes.participantReference === undefined
          ? {}
          : { participantReference: changes.participantReference }),

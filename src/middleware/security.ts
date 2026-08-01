@@ -85,6 +85,8 @@ export function authenticate(
       where: { id: session.user.id },
       select: {
         institutionId: true,
+        name: true,
+        image: true,
         institution: { select: { id: true, name: true, status: true } },
       },
     });
@@ -102,8 +104,8 @@ export function authenticate(
     const sessionContext = {
       userId: session.user.id,
       email: session.user.email,
-      name: session.user.name,
-      image: profileImageUrl(session.user.image),
+      name: user.name,
+      image: profileImageUrl(user.image),
       institutionId: institution?.id ?? null,
       institutionName: institution?.name ?? null,
       sessionId: session.session.id,
