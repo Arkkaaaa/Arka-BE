@@ -1129,6 +1129,7 @@ export const arkaOpenApi = {
           'multiButtonAttempts',
           'meanFirstResponseMs',
           'meanInterButtonMs',
+          'levelLatencies',
           'completionReason',
         ],
         properties: {
@@ -1140,6 +1141,18 @@ export const arkaOpenApi = {
           multiButtonAttempts: { type: 'integer', minimum: 0 },
           meanFirstResponseMs: { type: ['number', 'null'], minimum: 0 },
           meanInterButtonMs: { type: ['number', 'null'], minimum: 0 },
+          levelLatencies: {
+            type: 'array',
+            maxItems: 6,
+            items: {
+              type: 'object',
+              required: ['level', 'latencyMs'],
+              properties: {
+                level: { type: 'integer', minimum: 1, maximum: 6 },
+                latencyMs: { type: 'number', minimum: 0 },
+              },
+            },
+          },
           completionReason: {
             type: 'string',
             enum: ['LIVES_EXHAUSTED', 'LEVEL_CAP_REACHED'],
@@ -1245,10 +1258,12 @@ export const arkaOpenApi = {
       },
       HistoryPage: {
         type: 'object',
-        required: ['items', 'nextCursor'],
+        required: ['items', 'nextCursor', 'totalItems', 'totalPages'],
         properties: {
           items: { type: 'array', maxItems: 10, items: ref('HistoryItem') },
           nextCursor: { type: ['string', 'null'] },
+          totalItems: { type: 'integer', minimum: 0 },
+          totalPages: { type: 'integer', minimum: 0 },
         },
       },
       LeaderboardEntry: {

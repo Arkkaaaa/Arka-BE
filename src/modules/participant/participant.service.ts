@@ -1,12 +1,16 @@
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import {
+  GameMetricsSchema,
   HistoryPageDtoSchema,
   LeaderboardDtoSchema,
+  ParticipantDetailDtoSchema,
   ParticipantDtoSchema,
   ResolveParticipantResponseSchema,
+  type GameMetrics,
   type GameMode,
   type HistoryPageDto,
   type LeaderboardDto,
+  type ParticipantDetailDto,
   type ParticipantDto,
 } from '../../schemas/index.js';
 import { z } from 'zod';
@@ -36,6 +40,7 @@ export interface ParticipantIdentityInput {
 
 export interface ParticipantChanges {
   readonly displayName?: string | undefined;
+  readonly image?: string | null | undefined;
   readonly participantReference?: string | undefined;
   readonly status?: 'ACTIVE' | 'INACTIVE' | undefined;
 }
@@ -50,6 +55,7 @@ function participantDto(participant: ParticipantRecord): ParticipantDto {
   return ParticipantDtoSchema.parse({
     participantId: participant.participantId,
     displayName: participant.displayName,
+    image: participant.image,
     participantReference: participant.participantReference,
     status: participant.status,
     createdAt: participant.createdAt.toISOString(),
@@ -59,6 +65,56 @@ function participantDto(participant: ParticipantRecord): ParticipantDto {
 
 function normalizeDisplayName(value: string): string {
   return value.normalize('NFKC').trim().replace(/\s+/gu, ' ').toLocaleLowerCase('id-ID');
+}
+
+function average(values: readonly number[]): number | null {
+  return values.length === 0 ? null : values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function overallMetrics(mode: GameMode, results: readonly { score: number; metrics: unknown }[]) {
+  const parsed = results.flatMap((result) => {
+    const metrics = GameMetricsSchema.safeParse(result.metrics);
+    return metrics.success && metrics.data.mode === mode ? [{ score: result.score, metrics: metrics.data }] : [];
+  });
+  if (parsed.length === 0) return null;
+  const averageScore = Math.round(average(parsed.map((result) => result.score)) ?? 0);
+  if (mode === 'MOTOR_GRIP') {
+    const metrics = parsed.map((result) => result.metrics).filter((value): value is Extract<GameMetrics, { mode: 'MOTOR_GRIP' }> => value.mode === 'MOTOR_GRIP');
+    return {
+      mode,
+      averageScore,
+      averagePeakGripPercent: average(metrics.map((value) => value.peakGripPercent)) ?? 0,
+      averageContinuousHoldMs: average(metrics.map((value) => value.continuousHoldMs)) ?? 0,
+      targetCompletionPercent: (metrics.filter((value) => value.targetCompleted).length / metrics.length) * 100,
+    };
+  }
+  if (mode === 'GO_NO_GO') {
+    const metrics = parsed.map((result) => result.metrics).filter((value): value is Extract<GameMetrics, { mode: 'GO_NO_GO' }> => value.mode === 'GO_NO_GO');
+    return {
+      mode,
+      averageScore,
+      averageAccuracyPercent: average(metrics.map((value) => value.accuracyPercent)) ?? 0,
+      averageReactionMs: average(metrics.flatMap((value) => value.meanHitReactionMs === null ? [] : [value.meanHitReactionMs])),
+      totalTrials: metrics.reduce((sum, value) => sum + value.totalTrials, 0),
+      totalHits: metrics.reduce((sum, value) => sum + value.hits, 0),
+      totalMisses: metrics.reduce((sum, value) => sum + value.misses, 0),
+      totalFalsePositives: metrics.reduce((sum, value) => sum + value.falsePositives, 0),
+      totalCorrectRejections: metrics.reduce((sum, value) => sum + value.correctRejections, 0),
+    };
+  }
+  const metrics = parsed.map((result) => result.metrics).filter((value): value is Extract<GameMetrics, { mode: 'SEQUENCE_MEMORY' }> => value.mode === 'SEQUENCE_MEMORY');
+  const levels = Array.from({ length: 6 }, (_, index) => index + 1).flatMap((level) => {
+    const values = metrics.flatMap((value) => value.levelLatencies.filter((point) => point.level === level).map((point) => point.latencyMs));
+    const latencyMs = average(values);
+    return latencyMs === null ? [] : [{ level, latencyMs, samples: values.length }];
+  });
+  return {
+    mode,
+    averageScore,
+    averageMemorySpan: average(metrics.map((value) => value.maxSequenceLength)) ?? 0,
+    averageFirstResponseMs: average(metrics.flatMap((value) => value.meanFirstResponseMs === null ? [] : [value.meanFirstResponseMs])),
+    levelLatencies: levels,
+  };
 }
 
 function isUniqueConstraintError(error: unknown): boolean {
@@ -120,10 +176,26 @@ export class ParticipantService {
   public async getParticipant(
     institutionId: string,
     participantHandle: string,
-  ): Promise<ParticipantDto> {
+  ): Promise<ParticipantDetailDto> {
     const participant = await this.repository.findByHandle(institutionId, participantHandle);
     if (!participant) throw new AppError(404, 'participant_not_found', 'Peserta tidak ditemukan.');
-    return participantDto(participant);
+    const modeSummaries = await this.repository.modeSummaries(institutionId, participant.id);
+    return ParticipantDetailDtoSchema.parse({
+      ...participantDto(participant),
+      modeSummaries: modeSummaries.map((summary) => ({
+        mode: summary.mode,
+        savedSessionsTotal: summary.savedSessionsTotal,
+        latestSession: summary.latestSession
+          ? {
+              sessionId: summary.latestSession.sessionId,
+              score: summary.latestSession.score,
+              completedAt: summary.latestSession.completedAt.toISOString(),
+              gameRuleVersion: summary.latestSession.gameRuleVersion,
+            }
+          : null,
+        overallMetrics: overallMetrics(summary.mode, summary.results),
+      })),
+    });
   }
 
   public async updateParticipant(
@@ -138,9 +210,10 @@ export class ParticipantService {
             displayName: changes.displayName,
             normalizedName: normalizeDisplayName(changes.displayName),
           }),
-      ...(changes.participantReference === undefined
-        ? {}
-        : { participantReference: changes.participantReference }),
+       ...(changes.image === undefined ? {} : { image: changes.image }),
+       ...(changes.participantReference === undefined
+         ? {}
+         : { participantReference: changes.participantReference }),
       ...(changes.status === undefined ? {} : { status: changes.status }),
     };
     let participant: ParticipantRecord | null;
@@ -168,16 +241,22 @@ export class ParticipantService {
   ): Promise<HistoryPageDto> {
     const participantId = await this.participantPrimaryKey(institutionId, participantHandle);
     const cursor = filters.cursor ? this.decodeCursor(filters.cursor) : null;
-    const sessions = await this.repository.listSessions(
-      institutionId,
-      participantId,
-      {
-        ...(filters.mode ? { mode: filters.mode } : {}),
-        ...(filters.ruleVersion ? { ruleVersion: filters.ruleVersion } : {}),
-        ...(cursor ? { before: { at: new Date(cursor.at), id: cursor.id } } : {}),
-      },
-      PAGE_SIZE + 1,
-    );
+    const baseFilters = {
+      ...(filters.mode ? { mode: filters.mode } : {}),
+      ...(filters.ruleVersion ? { ruleVersion: filters.ruleVersion } : {}),
+    };
+    const [sessions, totalItems] = await Promise.all([
+      this.repository.listSessions(
+        institutionId,
+        participantId,
+        {
+          ...baseFilters,
+          ...(cursor ? { before: { at: new Date(cursor.at), id: cursor.id } } : {}),
+        },
+        PAGE_SIZE + 1,
+      ),
+      this.repository.countSessions(institutionId, participantId, baseFilters),
+    ]);
     const page = sessions.slice(0, PAGE_SIZE);
     const last = page.at(-1);
     return HistoryPageDtoSchema.parse({
@@ -195,6 +274,8 @@ export class ParticipantService {
         sessions.length > PAGE_SIZE && last
           ? this.encodeCursor({ at: last.createdAt.toISOString(), id: last.id })
           : null,
+      totalItems,
+      totalPages: Math.ceil(totalItems / PAGE_SIZE),
     });
   }
 

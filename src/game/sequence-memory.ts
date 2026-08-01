@@ -11,6 +11,7 @@ export interface SequenceMemoryConfig {
   maxSequenceLength: number;
   exampleItemMs: number;
   exampleGapMs: number;
+  initialDelayMs?: number;
   responsePromptMs?: number;
   responseTimeoutMs: number;
   maxAttempts?: number;
@@ -37,6 +38,7 @@ export interface SequenceMemoryMetrics {
   multiButtonAttempts: number;
   meanFirstResponseMs: number | null;
   meanInterButtonMs: number | null;
+  levelLatencies: { level: number; latencyMs: number }[];
   completionReason: 'LIVES_EXHAUSTED' | 'LEVEL_CAP_REACHED';
 }
 
@@ -91,6 +93,7 @@ export interface SequenceMemoryTransition {
 function normalizedConfig(config: SequenceMemoryConfig): Required<SequenceMemoryConfig> {
   const value = {
     ...config,
+    initialDelayMs: config.initialDelayMs ?? 1_200,
     responsePromptMs: config.responsePromptMs ?? 2_500,
     maxAttempts: config.maxAttempts ?? 3,
     feedbackMs: config.feedbackMs ?? 750,
@@ -104,6 +107,8 @@ function normalizedConfig(config: SequenceMemoryConfig): Required<SequenceMemory
     value.exampleItemMs <= 0 ||
     !Number.isSafeInteger(value.exampleGapMs) ||
     value.exampleGapMs < 0 ||
+    !Number.isSafeInteger(value.initialDelayMs) ||
+    value.initialDelayMs < 0 ||
     !Number.isSafeInteger(value.responsePromptMs) ||
     value.responsePromptMs < 0 ||
     !Number.isSafeInteger(value.responseTimeoutMs) ||
@@ -169,8 +174,8 @@ export function createSequenceMemory(
     sequence,
     randomState,
     phase: 'EXAMPLE',
-    phaseStartedAtMs: nowMs,
-    phaseEndsAtMs: nowMs + exampleDuration(sequence.length, rule),
+    phaseStartedAtMs: nowMs + rule.initialDelayMs,
+    phaseEndsAtMs: nowMs + rule.initialDelayMs + exampleDuration(sequence.length, rule),
     responseIndex: 0,
     errorIndex: null,
     completedLevels: 0,
@@ -226,6 +231,12 @@ function metricsCompletion(
         .filter((value): value is number => value !== null),
     ),
     meanInterButtonMs: mean(state.trials.flatMap((trial) => trial.interButtonMs)),
+    levelLatencies: state.trials
+      .filter(
+        (trial): trial is SequenceMemoryTrial & { firstResponseMs: number } =>
+          trial.outcome === 'SUCCESS' && trial.firstResponseMs !== null,
+      )
+      .map((trial) => ({ level: trial.sequenceLength, latencyMs: trial.firstResponseMs })),
     completionReason: reason,
   };
   const score = clamp(

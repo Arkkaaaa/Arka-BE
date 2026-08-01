@@ -144,6 +144,7 @@ model Participant {
   institution          Institution       @relation(fields: [institutionId], references: [id], onDelete: Restrict)
   participantReference String            @db.VarChar(64)
   displayName          String            @db.VarChar(100)
+  image                String?           @db.VarChar(48000)
   normalizedName       String            @db.VarChar(100)
   status               ParticipantStatus @default(ACTIVE)
   createdAt            DateTime          @default(now())

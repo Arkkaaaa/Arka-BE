@@ -7,6 +7,7 @@ export interface ParticipantRecord {
   readonly id: string;
   readonly participantId: string;
   readonly displayName: string;
+  readonly image: string | null;
   readonly participantReference: string;
   readonly status: 'ACTIVE' | 'INACTIVE';
   readonly createdAt: Date;
@@ -15,6 +16,7 @@ export interface ParticipantRecord {
 
 export interface ParticipantUpdateData {
   readonly displayName?: string | undefined;
+  readonly image?: string | null | undefined;
   readonly normalizedName?: string | undefined;
   readonly participantReference?: string | undefined;
   readonly status?: 'ACTIVE' | 'INACTIVE' | undefined;
@@ -81,6 +83,37 @@ export class ParticipantRepository {
     return this.prisma.participant.findFirst({
       where: { institutionId, participantId: participantHandle },
     });
+  }
+
+  public async modeSummaries(institutionId: string, participantId: string) {
+    const modes: readonly GameMode[] = ['MOTOR_GRIP', 'GO_NO_GO', 'SEQUENCE_MEMORY'];
+    return Promise.all(
+      modes.map(async (mode) => {
+        const where = {
+          institutionId,
+          participantId,
+          mode,
+          session: { institutionId, status: 'SAVED' as const },
+        };
+        const results = await this.prisma.gameResult.findMany({
+          where,
+          orderBy: [{ completedAt: 'desc' }, { sessionId: 'desc' }],
+          select: {
+            sessionId: true,
+            score: true,
+            completedAt: true,
+            gameRuleVersion: true,
+            metrics: true,
+          },
+        });
+        return {
+          mode,
+          savedSessionsTotal: results.length,
+          latestSession: results[0] ?? null,
+          results,
+        };
+      }),
+    );
   }
 
   public findPrimaryKey(
@@ -167,8 +200,9 @@ export class ParticipantRepository {
       const participant = await tx.participant.update({
         where: { id: current.id },
         data: {
-          ...(changes.displayName === undefined ? {} : { displayName: changes.displayName }),
-          ...(changes.normalizedName === undefined
+            ...(changes.displayName === undefined ? {} : { displayName: changes.displayName }),
+            ...(changes.image === undefined ? {} : { image: changes.image }),
+            ...(changes.normalizedName === undefined
             ? {}
             : { normalizedName: changes.normalizedName }),
           ...(changes.participantReference === undefined
@@ -184,6 +218,21 @@ export class ParticipantRepository {
         metadata: { changedFields },
       });
       return participant;
+    });
+  }
+
+  public countSessions(
+    institutionId: string,
+    participantId: string,
+    filters: ParticipantHistoryFilters,
+  ): Promise<number> {
+    return this.prisma.gameSession.count({
+      where: {
+        institutionId,
+        participantId,
+        ...(filters.mode ? { mode: filters.mode } : {}),
+        ...(filters.ruleVersion ? { gameRuleVersionSnapshot: filters.ruleVersion } : {}),
+      },
     });
   }
 

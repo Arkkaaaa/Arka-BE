@@ -1,10 +1,13 @@
+import type { GameMode } from '../../schemas/index.js';
 import { mapDeviceSnapshot } from '../device/device.service.js';
 import type { DashboardRepository } from './dashboard.repository.js';
 import {
   DashboardActivityDtoSchema,
+  DashboardLeaderboardDtoSchema,
   DashboardProgressDtoSchema,
   DashboardSummaryDtoSchema,
   type DashboardActivityDto,
+  type DashboardLeaderboardDto,
   type DashboardProgressDto,
   type DashboardSummaryDto,
 } from './dashboard.validation.js';
@@ -20,6 +23,21 @@ export class DashboardService {
       modes: activity.modes.map((mode) => ({
         ...mode,
         latestSavedAt: mode.latestSavedAt?.toISOString() ?? null,
+      })),
+    });
+  }
+
+  async leaderboard(institutionId: string, mode: GameMode): Promise<DashboardLeaderboardDto> {
+    const entries = await this.repository.leaderboard(institutionId, mode);
+    return DashboardLeaderboardDtoSchema.parse({
+      mode,
+      entries: entries.map((entry, index) => ({
+        rank: index + 1,
+        participantId: entry.participant.participantId,
+        displayName: entry.participant.displayName,
+        score: entry.score,
+        sessionsTotal: entry.sessionsTotal,
+        completedAt: entry.completedAt.toISOString(),
       })),
     });
   }

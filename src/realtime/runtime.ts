@@ -126,10 +126,9 @@ const SequenceRuleSchema = z
   .object({
     initialSequenceLength: z.number().int().min(1),
     maxSequenceLength: z.number().int().min(1).max(6).optional(),
-    maxCompletedLevels: z.number().int().positive().optional(),
-    initialLives: z.number().int().positive().optional(),
     exampleItemMs: z.number().int().positive(),
     exampleGapMs: z.number().int().nonnegative(),
+    initialDelayMs: z.number().int().nonnegative().max(5_000).optional(),
     responsePromptMs: z.literal(2_500).optional(),
     responseTimeoutMs: z.union([z.literal(5_000), z.literal(10_000)]),
     maxAttempts: z.literal(3).optional(),
@@ -738,6 +737,14 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         },
       });
       if (updated.count === 0) return this.readSessionDto(session.id, input.institutionId);
+      await enqueueMode3Command(this.dependencies.redis, {
+        lockId: runtime.lockId,
+        associationId: runtime.sessionId,
+        sessionId: runtime.sessionId,
+        kind: 'FEEDBACK',
+        payload: { action: 'HARD_STOP', expiresAfterMs: 1 },
+        expiresAt: new Date(Date.now() + 1_000),
+      });
       await this.saveSession(runtime);
       await this.publishSession(runtime, 'Permainan dijeda.');
     } else {
@@ -754,6 +761,8 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         },
       });
       if (updated.count === 0) return this.readSessionDto(session.id, input.institutionId);
+      runtime.lastSequenceCueKey = null;
+      await this.syncSequenceCue(runtime);
       await this.saveSession(runtime);
       await this.publishSession(runtime, 'Permainan dilanjutkan.');
     }
@@ -1252,22 +1261,6 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         runtime.seed,
         now,
       );
-    } else {
-      const rule = SequenceRuleSchema.parse(runtime.config);
-      runtime.engine = createSequenceMemory(
-        {
-          initialSequenceLength: rule.initialSequenceLength,
-          maxSequenceLength: rule.maxSequenceLength ?? 6,
-          exampleItemMs: rule.exampleItemMs,
-          exampleGapMs: rule.exampleGapMs,
-          responsePromptMs: rule.responsePromptMs ?? 2_500,
-          responseTimeoutMs: rule.responseTimeoutMs,
-          maxAttempts: rule.maxAttempts ?? 3,
-          ...(rule.feedbackMs === undefined ? {} : { feedbackMs: rule.feedbackMs }),
-        },
-        runtime.seed,
-        now,
-      );
     }
     if (!durableRecovery) {
       const updated = await this.dependencies.prisma.gameSession.updateMany({
@@ -1295,13 +1288,14 @@ export class AuthoritativeRuntime implements RuntimeGateway {
           maxSequenceLength: rule.maxSequenceLength ?? 6,
           exampleItemMs: rule.exampleItemMs,
           exampleGapMs: rule.exampleGapMs,
+          initialDelayMs: rule.initialDelayMs ?? 1_200,
           responsePromptMs: rule.responsePromptMs ?? 2_500,
           responseTimeoutMs: rule.responseTimeoutMs,
           maxAttempts: rule.maxAttempts ?? 3,
           ...(rule.feedbackMs === undefined ? {} : { feedbackMs: rule.feedbackMs }),
         },
         runtime.seed,
-        Date.now(),
+        now,
       );
     }
     runtime.status = 'PLAYING';

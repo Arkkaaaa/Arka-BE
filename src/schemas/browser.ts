@@ -100,12 +100,59 @@ export const ResolveParticipantResponseSchema = z.object({ participantId: Public
 export const ParticipantDtoSchema = z.object({
   participantId: PublicIdSchema,
   displayName: DisplayNameSchema,
+  image: ProfileImageSchema.nullable(),
   participantReference: ParticipantReferenceSchema,
   status: ParticipantStatusSchema,
   createdAt: IsoDateSchema,
   updatedAt: IsoDateSchema,
 });
 export type ParticipantDto = z.infer<typeof ParticipantDtoSchema>;
+export const ParticipantOverallMetricsSchema = z.discriminatedUnion('mode', [
+  z.object({
+    mode: z.literal('MOTOR_GRIP'),
+    averageScore: z.number().int().min(0).max(1000),
+    averagePeakGripPercent: z.number().min(0).max(100),
+    averageContinuousHoldMs: z.number().nonnegative(),
+    targetCompletionPercent: z.number().min(0).max(100),
+  }),
+  z.object({
+    mode: z.literal('GO_NO_GO'),
+    averageScore: z.number().int().min(0).max(1000),
+    averageAccuracyPercent: z.number().min(0).max(100),
+    averageReactionMs: z.number().nonnegative().nullable(),
+    totalTrials: z.number().int().nonnegative(),
+    totalHits: z.number().int().nonnegative(),
+    totalMisses: z.number().int().nonnegative(),
+    totalFalsePositives: z.number().int().nonnegative(),
+    totalCorrectRejections: z.number().int().nonnegative(),
+  }),
+  z.object({
+    mode: z.literal('SEQUENCE_MEMORY'),
+    averageScore: z.number().int().min(0).max(1000),
+    averageMemorySpan: z.number().min(0).max(6),
+    averageFirstResponseMs: z.number().nonnegative().nullable(),
+    levelLatencies: z.array(z.object({
+      level: z.number().int().min(1).max(6),
+      latencyMs: z.number().nonnegative(),
+      samples: z.number().int().positive(),
+    })).max(6),
+  }),
+]);
+export const ParticipantModeSummaryDtoSchema = z.object({
+  mode: GameModeSchema,
+  savedSessionsTotal: z.number().int().nonnegative(),
+  latestSession: z.object({
+    sessionId: UuidSchema,
+    score: z.number().int().min(0).max(1000),
+    completedAt: IsoDateSchema,
+    gameRuleVersion: z.string().max(80),
+  }).nullable(),
+  overallMetrics: ParticipantOverallMetricsSchema.nullable(),
+});
+export const ParticipantDetailDtoSchema = ParticipantDtoSchema.extend({
+  modeSummaries: z.array(ParticipantModeSummaryDtoSchema).length(3),
+});
+export type ParticipantDetailDto = z.infer<typeof ParticipantDetailDtoSchema>;
 export const ParticipantSearchQuerySchema = z.object({
   query: z.string().trim().max(100).default(''),
 });
@@ -114,6 +161,7 @@ export const CreateParticipantRequestSchema = z.object({ displayName: DisplayNam
 export const UpdateParticipantRequestSchema = z
   .object({
     displayName: DisplayNameSchema.optional(),
+    image: ProfileImageSchema.nullable().optional(),
     participantReference: ParticipantReferenceSchema.optional(),
     status: ParticipantStatusSchema.optional(),
   })
@@ -195,6 +243,21 @@ export const DashboardProgressDtoSchema = z.object({
   ),
 });
 export type DashboardProgressDto = z.infer<typeof DashboardProgressDtoSchema>;
+export const DashboardLeaderboardQuerySchema = z.object({ mode: GameModeSchema });
+export const DashboardLeaderboardDtoSchema = z.object({
+  mode: GameModeSchema,
+  entries: z.array(
+    z.object({
+      rank: z.number().int().min(1).max(10),
+      participantId: PublicIdSchema,
+      displayName: DisplayNameSchema,
+      score: z.number().int().min(0).max(1000),
+      sessionsTotal: z.number().int().positive(),
+      completedAt: IsoDateSchema,
+    }),
+  ).max(10),
+});
+export type DashboardLeaderboardDto = z.infer<typeof DashboardLeaderboardDtoSchema>;
 
 export const CreatePreparationRequestSchema = z
   .object({
@@ -276,6 +339,9 @@ export const SequenceMemoryMetricsSchema = z.object({
   multiButtonAttempts: z.number().int().nonnegative(),
   meanFirstResponseMs: z.number().nonnegative().nullable(),
   meanInterButtonMs: z.number().nonnegative().nullable(),
+  levelLatencies: z.array(
+    z.object({ level: z.number().int().min(1).max(6), latencyMs: z.number().nonnegative() }),
+  ).max(6).default([]),
   completionReason: z.enum(['LIVES_EXHAUSTED', 'LEVEL_CAP_REACHED']),
 });
 export const GameMetricsSchema = z.discriminatedUnion('mode', [
@@ -332,6 +398,8 @@ export const HistoryItemDtoSchema = z.object({
 export const HistoryPageDtoSchema = z.object({
   items: z.array(HistoryItemDtoSchema).max(10),
   nextCursor: z.string().nullable(),
+  totalItems: z.number().int().nonnegative(),
+  totalPages: z.number().int().nonnegative(),
 });
 export type HistoryPageDto = z.infer<typeof HistoryPageDtoSchema>;
 export const LeaderboardQuerySchema = z.object({

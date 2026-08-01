@@ -50,6 +50,47 @@ export class DashboardRepository {
     return this.devices.listInstitutionDevices(institutionId);
   }
 
+  async leaderboard(institutionId: string, mode: GameMode) {
+    const grouped = await this.prisma.gameResult.groupBy({
+      by: ['participantId'],
+      where: {
+        institutionId,
+        mode,
+        participantId: { not: null },
+        session: { institutionId, status: 'SAVED' },
+      },
+      _avg: { score: true },
+      _count: { _all: true },
+      _max: { completedAt: true },
+    });
+    const ranked = grouped
+      .filter((entry) => entry.participantId && entry._avg.score !== null && entry._max.completedAt)
+      .sort((left, right) =>
+        (right._avg.score ?? 0) - (left._avg.score ?? 0) ||
+        (left._max.completedAt?.getTime() ?? 0) - (right._max.completedAt?.getTime() ?? 0) ||
+        (left.participantId ?? '').localeCompare(right.participantId ?? ''),
+      )
+      .slice(0, 10);
+    const participants = await this.prisma.participant.findMany({
+      where: {
+        institutionId,
+        id: { in: ranked.flatMap((entry) => entry.participantId ? [entry.participantId] : []) },
+      },
+      select: { id: true, participantId: true, displayName: true },
+    });
+    const participantsById = new Map(participants.map((participant) => [participant.id, participant]));
+    return ranked.flatMap((entry) => {
+      const participant = entry.participantId ? participantsById.get(entry.participantId) : undefined;
+      if (!participant || entry._avg.score === null || !entry._max.completedAt) return [];
+      return [{
+        participant,
+        score: Math.round(entry._avg.score),
+        sessionsTotal: entry._count._all,
+        completedAt: entry._max.completedAt,
+      }];
+    });
+  }
+
   async progress(institutionId: string, now = new Date()): Promise<DashboardProgressRecord> {
     const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     const twentyEightDaysAgo = new Date(now.getTime() - 28 * 24 * 60 * 60 * 1000);
