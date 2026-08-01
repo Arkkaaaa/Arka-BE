@@ -42,7 +42,7 @@ import type { RealtimeDependencies } from './types.js';
 const CONNECTION_KEY = 'arka:{mode3}:connection';
 const CONNECTION_TTL_SECONDS = 15;
 const COMMAND_POLL_MS = 100;
-export const DEVICE_READINESS_LOW_BATTERY_PERCENT = 30;
+export const DEVICE_READINESS_LOW_BATTERY_PERCENT = 10;
 export const DEVICE_INTERRUPT_LOW_BATTERY_PERCENT = 10;
 const REFRESH_CONNECTION_SCRIPT = `
 if redis.call('GET', KEYS[1]) == ARGV[1] then
