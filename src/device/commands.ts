@@ -320,14 +320,17 @@ export async function acknowledgeMode3Command(
     command.associationId !== input.associationId ||
     command.connectionId !== input.connectionId ||
     command.bootId !== input.bootId ||
-    command.lastDispatchedAtMs <= 0 ||
-    command.lastDispatchedAtMs + COMMAND_ACK_TIMEOUT_MS <= Date.now()
+    command.lastDispatchedAtMs <= 0
   )
     return null;
   const status = input.outcome === 'ACK' ? 'ACKED' : 'NACKED';
   if (command.status === status && command.nackReason === (input.reason ?? null))
     return { command, duplicate: true };
-  if (command.status !== 'SENT') return null;
+  if (
+    command.status !== 'SENT' ||
+    command.lastDispatchedAtMs + COMMAND_ACK_TIMEOUT_MS <= Date.now()
+  )
+    return null;
   const updated = CommandSchema.parse({
     ...command,
     status,

@@ -832,7 +832,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     const runtime = await this.loadPreparation(setupId);
     if (!runtime || runtime.state !== 'BINDING_SETUP') return;
     runtime.setupBound = true;
-    runtime.state = runtime.mode === 'SEQUENCE_MEMORY' ? 'READY' : 'CALIBRATING';
+    runtime.state = 'CALIBRATING';
     const updated = await this.dependencies.prisma.gamePreparation.updateMany({
       where: { setupId, state: 'BINDING_SETUP' },
       data: { state: runtime.state, setupBoundAt: new Date() },
@@ -899,7 +899,10 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     buttonCode: ButtonCode,
     input: TrustedDeviceInput,
   ): Promise<void> {
-    if (association.setupId) return;
+    if (association.setupId) {
+      await this.handlePreparationButton(association.setupId, buttonCode, input);
+      return;
+    }
     if (association.sessionId) {
       await this.handleSessionInput(association.sessionId, { kind: 'BUTTON', buttonCode }, input);
     }
@@ -973,6 +976,31 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     if (updated.count === 0) return;
     await this.saveSession(runtime);
     await this.publishSession(runtime, 'Permainan segera dimulai.');
+  }
+
+  private async handlePreparationButton(
+    setupId: string,
+    buttonCode: ButtonCode,
+    input: TrustedDeviceInput,
+  ): Promise<void> {
+    const runtime = await this.loadPreparation(setupId);
+    if (
+      !runtime ||
+      runtime.mode !== 'SEQUENCE_MEMORY' ||
+      !runtime.setupBound ||
+      runtime.state !== 'CALIBRATING'
+    )
+      return;
+    runtime.lastInput = input;
+    runtime.checkedButton = buttonCode;
+    runtime.state = 'READY';
+    const updated = await this.dependencies.prisma.gamePreparation.updateMany({
+      where: { setupId, mode: 'SEQUENCE_MEMORY', state: 'CALIBRATING' },
+      data: { state: 'READY' },
+    });
+    if (updated.count === 0) return;
+    await this.savePreparation(runtime);
+    await this.publishPreparation(runtime);
   }
 
   private async handlePreparationFsr(
@@ -1888,7 +1916,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         instruction,
         setupBound: runtime.setupBound,
         checkedButton: runtime.checkedButton,
-        buttonCheckComplete: runtime.mode === 'SEQUENCE_MEMORY' && runtime.setupBound,
+        buttonCheckComplete: runtime.mode === 'SEQUENCE_MEMORY' && runtime.checkedButton !== null,
         ...(runtime.calibration && typeof runtime.calibration['gripPercent'] === 'number'
           ? { gripPercent: runtime.calibration['gripPercent'] }
           : {}),
