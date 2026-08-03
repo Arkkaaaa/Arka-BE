@@ -382,7 +382,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
 
   async recover(): Promise<void> {
     const now = new Date();
-    const preparations = await this.dependencies.prisma.gamePreparation.findMany({
+    const preparations = await this.dependencies.prisma.trGamePreparation.findMany({
       where: {
         state: { in: ['WAITING_DEVICE', 'BINDING_SETUP', 'CALIBRATING', 'PRACTICING', 'READY'] },
       },
@@ -397,7 +397,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       if (stored) this.#activeSetups.add(preparation.setupId);
       else await this.cancelPreparation(preparation.setupId, 'RUNTIME_RECOVERY_UNAVAILABLE');
     }
-    const sessions = await this.dependencies.prisma.gameSession.findMany({
+    const sessions = await this.dependencies.prisma.trGameSession.findMany({
       where: {
         status: { in: ['BINDING', 'COUNTDOWN', 'PLAYING', 'PAUSED', 'COMPLETED', 'SAVING'] },
       },
@@ -422,7 +422,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         'privacy_acknowledgement_required',
         'Persetujuan privasi diperlukan.',
       );
-    const ruleVersions = await this.dependencies.prisma.gameRuleVersion.findMany({
+    const ruleVersions = await this.dependencies.prisma.msGameRuleVersion.findMany({
       where: {
         institutionId: input.institutionId,
         mode: input.mode,
@@ -435,7 +435,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       throw new AppError(409, 'game_rule_unavailable', 'Aturan permainan belum tersedia.');
     const rule = ruleVersions[0]!;
     const config = parseRule(input.mode, rule.config);
-    const activePreparation = await this.dependencies.prisma.gamePreparation.findFirst({
+    const activePreparation = await this.dependencies.prisma.trGamePreparation.findFirst({
       where: {
         institutionId: input.institutionId,
         ownerSessionId: input.ownerSessionId,
@@ -504,7 +504,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
             participantReference: input.participantReference,
           })
         : null;
-      preparation = await this.dependencies.prisma.gamePreparation.create({
+      preparation = await this.dependencies.prisma.trGamePreparation.create({
         data: {
           preparationId,
           setupId,
@@ -583,7 +583,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
   }
 
   async createSession(input: CreateRuntimeSessionInput): Promise<CreateGameSessionResponse> {
-    const existing = await this.dependencies.prisma.sessionCreationRequest.findUnique({
+    const existing = await this.dependencies.prisma.trSessionCreationRequest.findUnique({
       where: {
         ownerSessionId_idempotencyKey: {
           ownerSessionId: input.ownerSessionId,
@@ -596,7 +596,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         throw new AppError(409, 'idempotency_conflict', 'Kunci idempotensi sudah dipakai.');
       return CreateGameSessionResponseSchema.parse(existing.responseSnapshot);
     }
-    const preparation = await this.dependencies.prisma.gamePreparation.findFirst({
+    const preparation = await this.dependencies.prisma.trGamePreparation.findFirst({
       where: {
         preparationId: input.preparationId,
         institutionId: input.institutionId,
@@ -641,7 +641,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       throw new AppError(409, 'device_reserved', 'Kepemilikan perangkat sudah berubah.');
     try {
       await this.dependencies.prisma.$transaction(async (tx) => {
-        await tx.gameSession.create({
+        await tx.trGameSession.create({
           data: {
             id: sessionId,
             institutionId: input.institutionId,
@@ -667,7 +667,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
             bindingDeadlineAt,
           },
         });
-        const consumed = await tx.gamePreparation.updateMany({
+        const consumed = await tx.trGamePreparation.updateMany({
           where: { id: preparation.id, state: 'READY', expiresAt: { gt: now } },
           data: { state: 'CONSUMED', consumedAt: now },
         });
@@ -677,7 +677,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
             'preparation_not_ready',
             'Persiapan sudah digunakan atau kedaluwarsa.',
           );
-        await tx.sessionCreationRequest.create({
+        await tx.trSessionCreationRequest.create({
           data: {
             ownerSessionId: input.ownerSessionId,
             idempotencyKey: input.idempotencyKey,
@@ -741,7 +741,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
   }
 
   async commandSession(input: CommandRuntimeSessionInput): Promise<GameSessionDto> {
-    const session = await this.dependencies.prisma.gameSession.findFirst({
+    const session = await this.dependencies.prisma.trGameSession.findFirst({
       where: {
         id: input.sessionId,
         institutionId: input.institutionId,
@@ -769,7 +769,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         throw new AppError(409, 'invalid_session_transition', 'Sesi tidak dapat dijeda.');
       runtime.engine = pauseEngine(runtime.engine, now);
       runtime.status = 'PAUSED';
-      const updated = await this.dependencies.prisma.gameSession.updateMany({
+      const updated = await this.dependencies.prisma.trGameSession.updateMany({
         where: { id: session.id, status: 'PLAYING' },
         data: {
           status: 'PAUSED',
@@ -793,7 +793,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         throw new AppError(409, 'invalid_session_transition', 'Sesi tidak dapat dilanjutkan.');
       runtime.engine = resumeEngine(runtime.engine, now);
       runtime.status = 'PLAYING';
-      const updated = await this.dependencies.prisma.gameSession.updateMany({
+      const updated = await this.dependencies.prisma.trGameSession.updateMany({
         where: { id: session.id, status: 'PAUSED' },
         data: {
           status: 'PLAYING',
@@ -815,7 +815,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     ownerSessionId: string,
     connectionId: string,
   ): Promise<boolean> {
-    const session = await this.dependencies.prisma.gameSession.findFirst({
+    const session = await this.dependencies.prisma.trGameSession.findFirst({
       where: {
         id: sessionId,
         ownerSessionId,
@@ -830,7 +830,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     runtime.companionPresent = true;
     runtime.companionEverPresent = true;
     runtime.companionGraceEndsAtMs = null;
-    await this.dependencies.prisma.gameSession.updateMany({
+    await this.dependencies.prisma.trGameSession.updateMany({
       where: { id: sessionId, status: { in: ['BINDING', 'COUNTDOWN', 'PLAYING', 'PAUSED'] } },
       data: { companionArrivedAt: new Date() },
     });
@@ -874,7 +874,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     if (!runtime || runtime.state !== 'BINDING_SETUP') return;
     runtime.setupBound = true;
     runtime.state = 'CALIBRATING';
-    const updated = await this.dependencies.prisma.gamePreparation.updateMany({
+    const updated = await this.dependencies.prisma.trGamePreparation.updateMany({
       where: { setupId, state: 'BINDING_SETUP' },
       data: { state: runtime.state, setupBoundAt: new Date() },
     });
@@ -884,7 +884,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
   }
 
   async handleSetupUnbound(setupId: string, _commandId: string): Promise<void> {
-    const session = await this.dependencies.prisma.gameSession.findFirst({
+    const session = await this.dependencies.prisma.trGameSession.findFirst({
       where: { preparation: { setupId }, status: 'BINDING' },
     });
     if (!session) {
@@ -912,7 +912,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
   }
 
   async handleSessionBound(sessionId: string): Promise<void> {
-    const updated = await this.dependencies.prisma.gameSession.updateMany({
+    const updated = await this.dependencies.prisma.trGameSession.updateMany({
       where: { id: sessionId, status: 'BINDING' },
       data: { sessionBoundAt: new Date() },
     });
@@ -957,7 +957,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
   }
 
   async expireOwnerSession(ownerSessionId: string): Promise<void> {
-    const preparations = await this.dependencies.prisma.gamePreparation.findMany({
+    const preparations = await this.dependencies.prisma.trGamePreparation.findMany({
       where: {
         ownerSessionId,
         state: { in: ['WAITING_DEVICE', 'BINDING_SETUP', 'CALIBRATING', 'PRACTICING', 'READY'] },
@@ -966,7 +966,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     });
     for (const preparation of preparations)
       await this.cancelPreparation(preparation.setupId, 'AUTH_SESSION_EXPIRED');
-    const sessions = await this.dependencies.prisma.gameSession.findMany({
+    const sessions = await this.dependencies.prisma.trGameSession.findMany({
       where: { ownerSessionId, status: { in: ['BINDING', 'COUNTDOWN', 'PLAYING', 'PAUSED'] } },
       select: { id: true },
     });
@@ -984,7 +984,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
   private async maybeBeginCountdown(runtime: SessionRuntime): Promise<void> {
     if (runtime.status !== 'BINDING') return;
     const now = Date.now();
-    const boundSession = await this.dependencies.prisma.gameSession.findFirst({
+    const boundSession = await this.dependencies.prisma.trGameSession.findFirst({
       where: {
         id: runtime.sessionId,
         status: 'BINDING',
@@ -1000,7 +1000,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     runtime.status = 'COUNTDOWN';
     runtime.countdownEndsAtMs = now + COUNTDOWN_MS;
     const activationId = randomUUID();
-    const updated = await this.dependencies.prisma.gameSession.updateMany({
+    const updated = await this.dependencies.prisma.trGameSession.updateMany({
       where: {
         id: runtime.sessionId,
         status: 'BINDING',
@@ -1041,7 +1041,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     }
     runtime.checkedButton = buttonCode;
     runtime.state = 'READY';
-    const updated = await this.dependencies.prisma.gamePreparation.updateMany({
+    const updated = await this.dependencies.prisma.trGamePreparation.updateMany({
       where: { setupId, mode: 'SEQUENCE_MEMORY', state: 'CALIBRATING' },
       data: { state: 'READY' },
     });
@@ -1110,7 +1110,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
           runtime.practice = createGoNoGoPracticePlan(seedFromId(runtime.setupId));
           runtime.practiceDeadlineMs = input.receivedAtMs + COUNTDOWN_MS;
           runtime.edge = { pressed: false, armed: true };
-          const updated = await this.dependencies.prisma.gamePreparation.updateMany({
+          const updated = await this.dependencies.prisma.trGamePreparation.updateMany({
             where: { setupId, state: 'CALIBRATING' },
             data: { state: 'PRACTICING', calibrationSnapshot: toInputJson(runtime.calibration) },
           });
@@ -1129,7 +1129,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
   }
 
   private async markPreparationReady(runtime: PreparationRuntime): Promise<void> {
-    const updated = await this.dependencies.prisma.gamePreparation.updateMany({
+    const updated = await this.dependencies.prisma.trGamePreparation.updateMany({
       where: { setupId: runtime.setupId, state: { in: ['CALIBRATING', 'PRACTICING'] } },
       data: {
         state: 'READY',
@@ -1256,7 +1256,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         await this.reconcileCompanionPresence(runtime, now);
       }
       if (runtime.status === 'BINDING') {
-        const session = await this.dependencies.prisma.gameSession.findUnique({
+        const session = await this.dependencies.prisma.trGameSession.findUnique({
           where: { id: sessionId },
           select: { bindingDeadlineAt: true },
         });
@@ -1338,7 +1338,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       );
     }
     if (!durableRecovery) {
-      const updated = await this.dependencies.prisma.gameSession.updateMany({
+      const updated = await this.dependencies.prisma.trGameSession.updateMany({
         where: { id: runtime.sessionId, status: 'COUNTDOWN' },
         data: {
           status: 'PLAYING',
@@ -1347,7 +1347,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         },
       });
       if (updated.count === 0) {
-        const durable = await this.dependencies.prisma.gameSession.findUnique({
+        const durable = await this.dependencies.prisma.trGameSession.findUnique({
           where: { id: runtime.sessionId },
           select: { status: true, startedAt: true },
         });
@@ -1393,7 +1393,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       trials: [...trials],
       completedAt: now.toISOString(),
     };
-    const claimed = await this.dependencies.prisma.gameSession.updateMany({
+    const claimed = await this.dependencies.prisma.trGameSession.updateMany({
       where: { id: runtime.sessionId, status: 'PLAYING' },
       data: {
         status: 'COMPLETED',
@@ -1416,7 +1416,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
 
   private async recoverFinalization(sessionId: string): Promise<'SAVED' | 'SAVE_FAILED' | null> {
     const now = new Date();
-    const session = await this.dependencies.prisma.gameSession.findUnique({
+    const session = await this.dependencies.prisma.trGameSession.findUnique({
       where: { id: sessionId },
       select: {
         status: true,
@@ -1473,7 +1473,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
   private async persistFinalization(sessionId: string): Promise<'SAVED' | 'SAVE_FAILED' | null> {
     const leaseToken = randomUUID();
     const claimedAt = new Date();
-    const claimed = await this.dependencies.prisma.gameSession.updateMany({
+    const claimed = await this.dependencies.prisma.trGameSession.updateMany({
       where: {
         id: sessionId,
         finalizationFailedAt: null,
@@ -1499,7 +1499,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
 
     try {
       await this.dependencies.prisma.$transaction(async (tx) => {
-        const session = await tx.gameSession.findFirstOrThrow({
+        const session = await tx.trGameSession.findFirstOrThrow({
           where: { id: sessionId, status: 'SAVING', finalizationLeaseToken: leaseToken },
           include: { result: true },
         });
@@ -1509,7 +1509,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         const payload = parsed.data;
         if (!session.result) {
           const completedAt = new Date(payload.completedAt);
-          await tx.gameResult.create({
+          await tx.trGameResult.create({
             data: {
               sessionId: session.id,
               institutionId: session.institutionId,
@@ -1537,7 +1537,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
           });
           for (const [index, trial] of payload.trials.entries()) {
             const value = recordFromUnknown(trial);
-            await tx.gameTrial.create({
+            await tx.trGameTrial.create({
               data: {
                 sessionId: session.id,
                 trialIndex: typeof value['trialIndex'] === 'number' ? value['trialIndex'] : index,
@@ -1561,11 +1561,11 @@ export class AuthoritativeRuntime implements RuntimeGateway {
               },
             });
           }
-          await tx.aiSessionSummary.create({
+          await tx.trAiSessionSummary.create({
             data: { sessionId: session.id, status: 'PENDING' },
           });
         }
-        const saved = await tx.gameSession.updateMany({
+        const saved = await tx.trGameSession.updateMany({
           where: { id: session.id, status: 'SAVING', finalizationLeaseToken: leaseToken },
           data: {
             status: 'SAVED',
@@ -1627,10 +1627,10 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     sessionId: string,
     failureCode: string,
     now: Date,
-    eligible: Prisma.GameSessionWhereInput,
+    eligible: Prisma.TrGameSessionWhereInput,
   ): Promise<boolean> {
     return this.dependencies.prisma.$transaction(async (tx) => {
-      const failed = await tx.gameSession.updateMany({
+      const failed = await tx.trGameSession.updateMany({
         where: { id: sessionId, finalizationFailedAt: null, ...eligible },
         data: {
           status: 'SAVE_FAILED',
@@ -1641,7 +1641,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         },
       });
       if (failed.count === 0) return false;
-      const session = await tx.gameSession.findUniqueOrThrow({
+      const session = await tx.trGameSession.findUniqueOrThrow({
         where: { id: sessionId },
         select: { institutionId: true },
       });
@@ -1656,7 +1656,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
           metadata: { failureCode },
         },
       );
-      await tx.outboxEvent.create({
+      await tx.trOutboxEvent.create({
         data: {
           eventKey: `session-finalization-failed:${sessionId}`,
           type: 'SESSION_FINALIZATION_FAILED',
@@ -1755,7 +1755,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     status: 'ABORTED' | 'INTERRUPTED',
     reason: string,
   ): Promise<void> {
-    const changed = await this.dependencies.prisma.gameSession.updateMany({
+    const changed = await this.dependencies.prisma.trGameSession.updateMany({
       where: { id: sessionId, status: { in: ['BINDING', 'COUNTDOWN', 'PLAYING', 'PAUSED'] } },
       data: { status, terminalReason: reason, completedAt: new Date() },
     });
@@ -1783,7 +1783,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
   }
 
   private async expirePreparations(now: Date): Promise<void> {
-    const expired = await this.dependencies.prisma.gamePreparation.findMany({
+    const expired = await this.dependencies.prisma.trGamePreparation.findMany({
       where: {
         state: { in: ['WAITING_DEVICE', 'BINDING_SETUP', 'CALIBRATING', 'PRACTICING', 'READY'] },
         expiresAt: { lte: now },
@@ -1799,7 +1799,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     reason: string,
     now: Date,
   ): Promise<void> {
-    const changed = await this.dependencies.prisma.gamePreparation.updateMany({
+    const changed = await this.dependencies.prisma.trGamePreparation.updateMany({
       where: {
         setupId,
         state: {
@@ -2011,7 +2011,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
   }
 
   private async publishPersistedSession(sessionId: string, message: string): Promise<void> {
-    const session = await this.dependencies.prisma.gameSession.findUnique({
+    const session = await this.dependencies.prisma.trGameSession.findUnique({
       where: { id: sessionId },
       include: { result: true, aiSummary: true },
     });
@@ -2034,7 +2034,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
   }
 
   private async readSessionDto(sessionId: string, institutionId: string): Promise<GameSessionDto> {
-    const session = await this.dependencies.prisma.gameSession.findFirst({
+    const session = await this.dependencies.prisma.trGameSession.findFirst({
       where: { id: sessionId, institutionId },
       include: { result: true, aiSummary: true },
     });

@@ -86,13 +86,13 @@ async function ensureRules(
 ): Promise<void> {
   for (const rule of GAME_RULES) {
     const identity = { institutionId, mode: rule.mode, version: rule.version };
-    const existing = await transaction.gameRuleVersion.findUnique({
+    const existing = await transaction.msGameRuleVersion.findUnique({
       where: { institutionId_mode_version: identity },
     });
     if (existing && !isDeepStrictEqual(existing.config, rule.config)) {
       throw new Error(`Immutable game rule version collision for ${institutionId}/${rule.mode}/${rule.version}.`);
     }
-    await transaction.gameRuleVersion.updateMany({
+    await transaction.msGameRuleVersion.updateMany({
       where: {
         institutionId,
         mode: rule.mode,
@@ -103,13 +103,13 @@ async function ensureRules(
     });
     if (existing) {
       if (!existing.isActive || existing.approvedAt === null) {
-        await transaction.gameRuleVersion.update({
+        await transaction.msGameRuleVersion.update({
           where: { id: existing.id },
           data: { isActive: true, approvedAt: existing.approvedAt ?? new Date() },
         });
       }
     } else {
-      await transaction.gameRuleVersion.create({
+      await transaction.msGameRuleVersion.create({
         data: {
           ...identity,
           config: rule.config,
@@ -122,7 +122,7 @@ async function ensureRules(
 }
 
 export async function ensureAllInstitutionGameRules(prisma: PrismaClient): Promise<number> {
-  const institutions = await prisma.institution.findMany({
+  const institutions = await prisma.msInstitution.findMany({
     where: { status: 'ACTIVE' },
     select: { id: true },
   });

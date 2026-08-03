@@ -81,7 +81,7 @@ export function authenticate(
     for (const cookie of result.headers.getSetCookie()) res.append('Set-Cookie', cookie);
     const session = result.response;
     if (!session) throw new AppError(401, 'unauthorized', 'Silakan masuk untuk melanjutkan.');
-    const user = await prisma.user.findUnique({
+    const user = await prisma.msUser.findUnique({
       where: { id: session.user.id },
       select: {
         institutionId: true,

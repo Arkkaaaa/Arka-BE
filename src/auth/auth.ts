@@ -101,7 +101,7 @@ export function createAuth(prisma: PrismaClient, env: Env): Auth {
               { name: string; status: 'ACTIVE' },
               { id: string }
             >({
-              model: 'institution',
+              model: 'msInstitution',
               data: { name: institutionName, status: 'ACTIVE' },
               select: ['id'],
             });
@@ -117,6 +117,7 @@ export function createAuth(prisma: PrismaClient, env: Env): Auth {
       },
     },
     user: {
+      modelName: 'MsUser',
       additionalFields: {
         institutionId: {
           type: 'string',
@@ -127,8 +128,15 @@ export function createAuth(prisma: PrismaClient, env: Env): Auth {
       },
     },
     session: {
+      modelName: 'TrSession',
       expiresIn: 8 * 60 * 60,
       updateAge: 15 * 60,
+    },
+    account: {
+      modelName: 'MsAccount',
+    },
+    verification: {
+      modelName: 'TrVerification',
     },
     advanced: {
       useSecureCookies: env.NODE_ENV === 'production',

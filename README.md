@@ -66,7 +66,9 @@ Buat `.env` dari `.env.example` dan ganti semua nilai contoh.
 | `BETTER_AUTH_URL` | Origin backend untuk Better Auth |
 | `BROWSER_ORIGINS` | Comma-separated exact origins browser |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | Optional Google OAuth pair |
-| `OLLAMA_BASE_URL` | URL privat Ollama |
+| `OLLAMA_PROVIDER` | `ollama` atau `openai` untuk endpoint OpenAI-compatible |
+| `OLLAMA_BASE_URL` | Base URL provider AI |
+| `OLLAMA_API_KEY` | API key untuk provider `openai`; kosong untuk Ollama lokal |
 | `OLLAMA_MODEL` | Model yang diizinkan |
 | `OLLAMA_MODEL_ALLOWLIST` | Daftar model yang diizinkan |
 | `OPERATIONS_ALERT_WEBHOOK_URL` | Endpoint alert outbox |

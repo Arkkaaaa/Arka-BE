@@ -17,7 +17,7 @@ const originSchema = z
     return url.origin;
   });
 
-const privateOllamaUrlSchema = z
+const ollamaUrlSchema = z
   .string()
   .url()
   .transform((value, ctx) => {
@@ -36,25 +36,32 @@ const privateOllamaUrlSchema = z
       });
       return z.NEVER;
     }
-    const hostname = url.hostname.toLowerCase();
-    const privateHost =
-      hostname === 'localhost' ||
-      hostname === '127.0.0.1' ||
-      hostname === '::1' ||
-      hostname.endsWith('.internal') ||
-      hostname.endsWith('.local') ||
-      /^10\./u.test(hostname) ||
-      /^192\.168\./u.test(hostname) ||
-      /^172\.(1[6-9]|2\d|3[01])\./u.test(hostname);
-    if (!privateHost) {
-      ctx.addIssue({
-        code: 'custom',
-        message: 'OLLAMA_BASE_URL must resolve through an explicitly private hostname or address',
-      });
-      return z.NEVER;
-    }
     return url.toString().replace(/\/$/u, '');
   });
+
+function deviceSecretSchema(name: string) {
+  return z.preprocess(
+    (value) => (value === '' ? undefined : value),
+    z
+      .string()
+      .transform((encoded, ctx) => {
+        const secret = Buffer.from(encoded, 'base64');
+        if (
+          secret.length < 32 ||
+          secret.length > 64 ||
+          secret.toString('base64').replace(/=+$/u, '') !== encoded.replace(/=+$/u, '')
+        ) {
+          ctx.addIssue({
+            code: 'custom',
+            message: `${name} must be canonical base64 for 32 to 64 bytes`,
+          });
+          return z.NEVER;
+        }
+        return secret;
+      })
+      .optional(),
+  );
+}
 
 const alertWebhookUrlSchema = z
   .string()
@@ -100,25 +107,13 @@ const rawEnvSchema = z.object({
   BINDING_DEADLINE_MS: positiveInt.default(20_000),
   IDEMPOTENCY_TTL_MS: positiveInt.default(86_400_000),
   DEVICE_COMMAND_TTL_MS: positiveInt.default(30_000),
-  MODE3_DEVICE_SECRET_BASE64: z.preprocess(
+  DEVICE_SECRET_BASE64: deviceSecretSchema('DEVICE_SECRET_BASE64'),
+  OLLAMA_PROVIDER: z.enum(['ollama', 'openai']).default('ollama'),
+  OLLAMA_BASE_URL: ollamaUrlSchema,
+  OLLAMA_API_KEY: z.preprocess(
     (value) => (value === '' ? undefined : value),
-    z
-      .string()
-      .transform((encoded, ctx) => {
-        const secret = Buffer.from(encoded, 'base64');
-        if (
-          secret.length < 32 ||
-          secret.length > 64 ||
-          secret.toString('base64').replace(/=+$/u, '') !== encoded.replace(/=+$/u, '')
-        ) {
-          ctx.addIssue({ code: 'custom', message: 'MODE3_DEVICE_SECRET_BASE64 must be canonical base64 for 32 to 64 bytes' });
-          return z.NEVER;
-        }
-        return secret;
-      })
-      .optional(),
+    z.string().min(1).optional(),
   ),
-  OLLAMA_BASE_URL: privateOllamaUrlSchema,
   OLLAMA_MODEL: z
     .string()
     .min(1)
@@ -162,6 +157,25 @@ export function parseEnv(source: NodeJS.ProcessEnv): Env {
   );
   if (!ollamaModelAllowlist.has(parsed.OLLAMA_MODEL)) {
     throw new Error('OLLAMA_MODEL must be present in OLLAMA_MODEL_ALLOWLIST');
+  }
+  const ollamaUrl = new URL(parsed.OLLAMA_BASE_URL);
+  if (parsed.OLLAMA_PROVIDER === 'openai') {
+    if (!parsed.OLLAMA_API_KEY) throw new Error('OLLAMA_API_KEY is required for the openai provider');
+    if (ollamaUrl.protocol !== 'https:') throw new Error('OLLAMA_BASE_URL must use HTTPS for the openai provider');
+  } else {
+    const hostname = ollamaUrl.hostname.toLowerCase();
+    const privateHost =
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname === '::1' ||
+      hostname.endsWith('.internal') ||
+      hostname.endsWith('.local') ||
+      /^10\./u.test(hostname) ||
+      /^192\.168\./u.test(hostname) ||
+      /^172\.(1[6-9]|2\d|3[01])\./u.test(hostname);
+    if (!privateHost) {
+      throw new Error('OLLAMA_BASE_URL must resolve through an explicitly private hostname or address');
+    }
   }
   const authOrigin = new URL(parsed.BETTER_AUTH_URL).origin;
   if (parsed.NODE_ENV === 'production' && new URL(parsed.BETTER_AUTH_URL).protocol !== 'https:') {

@@ -54,7 +54,7 @@ export class DashboardRepository {
   }
 
   async leaderboard(institutionId: string, mode: GameMode) {
-    const grouped = await this.prisma.gameResult.groupBy({
+    const grouped = await this.prisma.trGameResult.groupBy({
       by: ['participantId'],
       where: {
         institutionId,
@@ -74,7 +74,7 @@ export class DashboardRepository {
         (left.participantId ?? '').localeCompare(right.participantId ?? ''),
       )
       .slice(0, 10);
-    const participants = await this.prisma.participant.findMany({
+    const participants = await this.prisma.msParticipant.findMany({
       where: {
         institutionId,
         id: { in: ranked.flatMap((entry) => entry.participantId ? [entry.participantId] : []) },
@@ -97,7 +97,7 @@ export class DashboardRepository {
   async progress(institutionId: string, now = new Date()): Promise<DashboardProgressRecord> {
     const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
     const twentyEightDaysAgo = new Date(now.getTime() - 28 * 24 * 60 * 60 * 1000);
-    const participants = await this.prisma.participant.findMany({
+    const participants = await this.prisma.msParticipant.findMany({
       where: { institutionId, status: 'ACTIVE' },
       orderBy: [{ normalizedName: 'asc' }, { participantId: 'asc' }],
       select: { id: true, participantId: true, displayName: true, image: true, dateOfBirth: true, gender: true },
@@ -113,15 +113,15 @@ export class DashboardRepository {
             session: { institutionId, status: 'SAVED' as const },
           };
           const [savedSessionsTotal, sessionsLast7Days, recentResults, latest] = await Promise.all([
-            this.prisma.gameResult.count({ where: savedWhere }),
-            this.prisma.gameResult.count({
+            this.prisma.trGameResult.count({ where: savedWhere }),
+            this.prisma.trGameResult.count({
               where: { ...savedWhere, completedAt: { gte: sevenDaysAgo, lte: now } },
             }),
-            this.prisma.gameResult.findMany({
+            this.prisma.trGameResult.findMany({
               where: { ...savedWhere, completedAt: { gte: twentyEightDaysAgo, lte: now } },
               select: { completedAt: true },
             }),
-            this.prisma.gameResult.findFirst({
+            this.prisma.trGameResult.findFirst({
               where: savedWhere,
               orderBy: [{ completedAt: 'desc' }, { sessionId: 'desc' }],
               select: {
@@ -139,7 +139,7 @@ export class DashboardRepository {
             ),
           );
           const previous = latest
-            ? await this.prisma.gameResult.findFirst({
+            ? await this.prisma.trGameResult.findFirst({
                 where: {
                   ...savedWhere,
                   mode: latest.mode,
@@ -184,31 +184,31 @@ export class DashboardRepository {
       recentByMode,
       latestByMode,
     ] = await Promise.all([
-      this.prisma.participant.count({ where: { institutionId, status: 'ACTIVE' } }),
-      this.prisma.gameResult.count({ where: savedWhere }),
-      this.prisma.gameResult.findMany({
+      this.prisma.msParticipant.count({ where: { institutionId, status: 'ACTIVE' } }),
+      this.prisma.trGameResult.count({ where: savedWhere }),
+      this.prisma.trGameResult.findMany({
         where: { ...savedWhere, completedAt: { gte: seriesStart, lte: now } },
         select: { completedAt: true },
       }),
-      this.prisma.gameResult.findFirst({
+      this.prisma.trGameResult.findFirst({
         where: savedWhere,
         orderBy: { completedAt: 'desc' },
         select: { completedAt: true },
       }),
-      this.prisma.gameResult.groupBy({
+      this.prisma.trGameResult.groupBy({
         by: ['mode'],
         where: savedWhere,
         _count: { _all: true },
         _max: { completedAt: true },
       }),
-      this.prisma.gameResult.groupBy({
+      this.prisma.trGameResult.groupBy({
         by: ['mode'],
         where: { ...savedWhere, completedAt: { gte: seriesStart, lte: now } },
         _count: { _all: true },
       }),
       Promise.all(
         MODES.map((mode) =>
-          this.prisma.gameResult.findFirst({
+          this.prisma.trGameResult.findFirst({
             where: { ...savedWhere, mode },
             orderBy: { completedAt: 'desc' },
             select: { mode: true, completedAt: true, gameRuleVersion: true },

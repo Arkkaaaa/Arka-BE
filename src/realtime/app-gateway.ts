@@ -90,7 +90,7 @@ async function authenticate(
 ): Promise<OnboardedRealtimeAuthSession | null> {
   const auth = await dependencies.auth.api.getSession({ headers: webHeaders(request.headers) });
   if (!auth) return null;
-  const user = await dependencies.prisma.user.findUnique({
+  const user = await dependencies.prisma.msUser.findUnique({
     where: { id: auth.user.id },
     select: { institutionId: true },
   });
@@ -111,7 +111,7 @@ async function ownsScope(
   dependencies: RealtimeDependencies,
 ): Promise<boolean> {
   if (scope === 'setup') {
-    const preparation = await dependencies.prisma.gamePreparation.findFirst({
+    const preparation = await dependencies.prisma.trGamePreparation.findFirst({
       where: {
         setupId: id,
         institutionId: auth.user.institutionId,
@@ -121,7 +121,7 @@ async function ownsScope(
     });
     return preparation !== null;
   }
-  const session = await dependencies.prisma.gameSession.findFirst({
+  const session = await dependencies.prisma.trGameSession.findFirst({
     where: {
       id,
       institutionId: auth.user.institutionId,

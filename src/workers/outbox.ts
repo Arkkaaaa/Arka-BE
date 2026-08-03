@@ -94,7 +94,7 @@ export class OutboxWorker {
   private async expireExhaustedLeases(): Promise<void> {
     const { prisma, env } = this.dependencies;
     const now = new Date();
-    const expired = await prisma.outboxEvent.updateMany({
+    const expired = await prisma.trOutboxEvent.updateMany({
       where: {
         type: OUTBOX_EVENT_TYPE,
         attemptCount: { gte: env.OUTBOX_MAX_ATTEMPTS },
@@ -138,7 +138,7 @@ export class OutboxWorker {
     };
 
     for (let attempt = 0; attempt < 3 && !this.#stopping; attempt += 1) {
-      const candidate = await prisma.outboxEvent.findFirst({
+      const candidate = await prisma.trOutboxEvent.findFirst({
         where: eligible,
         select: { id: true },
         orderBy: { createdAt: 'asc' },
@@ -146,7 +146,7 @@ export class OutboxWorker {
       if (!candidate) return null;
 
       const leaseToken = randomUUID();
-      const claimed = await prisma.outboxEvent.updateMany({
+      const claimed = await prisma.trOutboxEvent.updateMany({
         where: { id: candidate.id, ...eligible },
         data: {
           status: 'PROCESSING',
@@ -162,7 +162,7 @@ export class OutboxWorker {
         return null;
       }
 
-      const loaded = await prisma.outboxEvent.findFirst({
+      const loaded = await prisma.trOutboxEvent.findFirst({
         where: {
           id: candidate.id,
           type: OUTBOX_EVENT_TYPE,
@@ -206,7 +206,7 @@ export class OutboxWorker {
       await this.postAlert(event, parsedPayload.data);
       // The lease token, not wall-clock expiry, fences this completion against reclaims.
 
-      const completed = await this.dependencies.prisma.outboxEvent.updateMany({
+      const completed = await this.dependencies.prisma.trOutboxEvent.updateMany({
         where: {
           id: event.id,
           status: 'PROCESSING',
@@ -236,7 +236,7 @@ export class OutboxWorker {
     failureCode: DeliveryFailureCode,
   ): Promise<void> {
     const failed = event.attemptCount >= this.dependencies.env.OUTBOX_MAX_ATTEMPTS;
-    const completed = await this.dependencies.prisma.outboxEvent.updateMany({
+    const completed = await this.dependencies.prisma.trOutboxEvent.updateMany({
       where: {
         id: event.id,
         status: 'PROCESSING',
@@ -272,7 +272,7 @@ export class OutboxWorker {
   }
 
   private async releaseClaim(id: string, leaseToken: string): Promise<void> {
-    await this.dependencies.prisma.outboxEvent.updateMany({
+    await this.dependencies.prisma.trOutboxEvent.updateMany({
       where: { id, status: 'PROCESSING', leaseToken },
       data: {
         status: 'PENDING',

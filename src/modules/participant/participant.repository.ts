@@ -74,7 +74,7 @@ export class ParticipantRepository {
     institutionId: string,
     participantReference: string,
   ): Promise<{ participantId: string } | null> {
-    return this.prisma.participant.findFirst({
+    return this.prisma.msParticipant.findFirst({
       where: { institutionId, participantReference },
       select: { participantId: true },
     });
@@ -84,7 +84,7 @@ export class ParticipantRepository {
     institutionId: string,
     participantHandle: string,
   ): Promise<ParticipantRecord | null> {
-    return this.prisma.participant.findFirst({
+    return this.prisma.msParticipant.findFirst({
       where: { institutionId, participantId: participantHandle },
     });
   }
@@ -99,7 +99,7 @@ export class ParticipantRepository {
           mode,
           session: { institutionId, status: 'SAVED' as const },
         };
-        const results = await this.prisma.gameResult.findMany({
+        const results = await this.prisma.trGameResult.findMany({
           where,
           orderBy: [{ completedAt: 'desc' }, { sessionId: 'desc' }],
           select: {
@@ -124,7 +124,7 @@ export class ParticipantRepository {
     institutionId: string,
     participantHandle: string,
   ): Promise<{ id: string } | null> {
-    return this.prisma.participant.findFirst({
+    return this.prisma.msParticipant.findFirst({
       where: { institutionId, participantId: participantHandle },
       select: { id: true },
     });
@@ -144,7 +144,7 @@ export class ParticipantRepository {
     rawQuery: string,
     take: number,
   ): Promise<ParticipantRecord[]> {
-    return this.prisma.participant.findMany({
+    return this.prisma.msParticipant.findMany({
       where: {
         institutionId,
         status: 'ACTIVE',
@@ -173,7 +173,7 @@ export class ParticipantRepository {
     },
   ): Promise<ParticipantRecord> {
     return this.prisma.$transaction(async (transaction) => {
-      const participant = await transaction.participant.create({
+      const participant = await transaction.msParticipant.create({
         data: {
           institutionId: context.institutionId,
           participantId: publicHandle(),
@@ -200,12 +200,12 @@ export class ParticipantRepository {
     changedFields: readonly string[],
   ): Promise<ParticipantRecord | null> {
     return this.prisma.$transaction(async (tx) => {
-      const current = await tx.participant.findFirst({
+      const current = await tx.msParticipant.findFirst({
         where: { institutionId: context.institutionId, participantId: participantHandle },
       });
       if (!current) return null;
 
-      const participant = await tx.participant.update({
+      const participant = await tx.msParticipant.update({
         where: { id: current.id },
         data: {
             ...(changes.displayName === undefined ? {} : { displayName: changes.displayName }),
@@ -236,7 +236,7 @@ export class ParticipantRepository {
     participantId: string,
     filters: ParticipantHistoryFilters,
   ): Promise<number> {
-    return this.prisma.gameSession.count({
+    return this.prisma.trGameSession.count({
       where: {
         institutionId,
         participantId,
@@ -252,7 +252,7 @@ export class ParticipantRepository {
     filters: ParticipantHistoryFilters,
     take: number,
   ): Promise<ParticipantSessionRecord[]> {
-    const where: Prisma.GameSessionWhereInput = {
+    const where: Prisma.TrGameSessionWhereInput = {
       institutionId,
       participantId,
       ...(filters.mode ? { mode: filters.mode } : {}),
@@ -266,7 +266,7 @@ export class ParticipantRepository {
           }
         : {}),
     };
-    return this.prisma.gameSession.findMany({
+    return this.prisma.trGameSession.findMany({
       where,
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       take,
@@ -288,7 +288,7 @@ export class ParticipantRepository {
     mode: GameMode,
     ruleVersion: string,
   ): Promise<ParticipantLeaderboardRecord[]> {
-    return this.prisma.gameResult.findMany({
+    return this.prisma.trGameResult.findMany({
       where: {
         institutionId,
         participantId,
@@ -314,7 +314,7 @@ export class ParticipantRepository {
     if (existing) return this.refreshIdentity(existing, input);
 
     try {
-      return await this.prisma.participant.create({
+      return await this.prisma.msParticipant.create({
         data: {
           institutionId,
           participantId: publicHandle(),
@@ -336,7 +336,7 @@ export class ParticipantRepository {
     institutionId: string,
     participantReference: string,
   ): Promise<EnsuredParticipantRecord | null> {
-    return this.prisma.participant.findFirst({
+    return this.prisma.msParticipant.findFirst({
       where: { institutionId, participantReference },
       select: { id: true, participantId: true, status: true },
     });
@@ -347,7 +347,7 @@ export class ParticipantRepository {
     input: { readonly displayName: string; readonly normalizedName: string },
   ): Promise<EnsuredParticipantRecord> {
     if (participant.status === 'INACTIVE') return participant;
-    await this.prisma.participant.update({
+    await this.prisma.msParticipant.update({
       where: { id: participant.id },
       data: { displayName: input.displayName, normalizedName: input.normalizedName },
     });

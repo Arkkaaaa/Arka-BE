@@ -79,6 +79,13 @@ const SummaryOutputSchema = z
   .strict();
 
 const OllamaResponseSchema = z.object({ message: z.object({ content: z.string() }) }).passthrough();
+const OpenAiResponseSchema = z
+  .object({
+    choices: z
+      .array(z.object({ message: z.object({ content: z.string() }) }).passthrough())
+      .min(1),
+  })
+  .passthrough();
 
 const SUMMARY_FORMAT = {
   type: 'object',
@@ -119,7 +126,7 @@ export interface AiSummaryWorkerDependencies {
   readonly logger: Logger;
 }
 
-/** Polls saved session summaries and keeps all model data local to the configured Ollama server. */
+/** Polls saved session summaries through the configured AI provider. */
 export class AiSummaryWorker {
   #timer: NodeJS.Timeout | null = null;
   #activeTick: Promise<void> | null = null;
@@ -174,7 +181,7 @@ export class AiSummaryWorker {
   private async expireExhaustedLeases(): Promise<void> {
     const { prisma, env } = this.dependencies;
     const now = new Date();
-    await prisma.aiSessionSummary.updateMany({
+    await prisma.trAiSessionSummary.updateMany({
       where: {
         attemptCount: { gte: env.OLLAMA_MAX_ATTEMPTS },
         OR: [
@@ -212,7 +219,7 @@ export class AiSummaryWorker {
     };
 
     for (let attempt = 0; attempt < 3 && !this.#stopping; attempt += 1) {
-      const candidate = await prisma.aiSessionSummary.findFirst({
+      const candidate = await prisma.trAiSessionSummary.findFirst({
         where: eligible,
         select: { id: true },
         orderBy: { createdAt: 'asc' },
@@ -220,7 +227,7 @@ export class AiSummaryWorker {
       if (!candidate) return null;
 
       const leaseToken = randomUUID();
-      const claimed = await prisma.aiSessionSummary.updateMany({
+      const claimed = await prisma.trAiSessionSummary.updateMany({
         where: { id: candidate.id, ...eligible },
         data: {
           status: 'PROCESSING',
@@ -232,7 +239,7 @@ export class AiSummaryWorker {
       });
       if (claimed.count !== 1) continue;
 
-      const loaded = await prisma.aiSessionSummary.findFirst({
+      const loaded = await prisma.trAiSessionSummary.findFirst({
         where: {
           id: candidate.id,
           status: 'PROCESSING',
@@ -282,7 +289,7 @@ export class AiSummaryWorker {
       const output = await this.generateSummary(summary, metrics.data);
       if (this.#stopping) return;
 
-      await this.dependencies.prisma.aiSessionSummary.updateMany({
+      await this.dependencies.prisma.trAiSessionSummary.updateMany({
         where: {
           id: summary.id,
           status: 'PROCESSING',
@@ -313,7 +320,7 @@ export class AiSummaryWorker {
     if (this.#stopping) return;
 
     const unavailable = summary.attemptCount >= this.dependencies.env.OLLAMA_MAX_ATTEMPTS;
-    await this.dependencies.prisma.aiSessionSummary.updateMany({
+    await this.dependencies.prisma.trAiSessionSummary.updateMany({
       where: {
         id: summary.id,
         status: 'PROCESSING',
@@ -357,7 +364,7 @@ export class AiSummaryWorker {
         controller.abort();
         return;
       }
-      void prisma.aiSessionSummary
+      void prisma.trAiSessionSummary
         .updateMany({
           where: {
             id: summary.id,
@@ -383,43 +390,62 @@ export class AiSummaryWorker {
     this.#activeRequest = controller;
 
     try {
-      const response = await fetch(`${env.OLLAMA_BASE_URL}/api/chat`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        signal: controller.signal,
-        body: JSON.stringify({
-          model: env.OLLAMA_MODEL,
-          stream: false,
-          format: SUMMARY_FORMAT,
-          options: { temperature: 0.2 },
-          messages: [
-            {
-              role: 'system',
-              content:
-                'Tulis ringkasan hasil permainan dalam bahasa Indonesia yang singkat, netral, dan mudah dipahami. Gunakan hanya data agregat yang diberikan. Jangan menyebut identitas, membuat diagnosis medis, atau memberi saran klinis. Balas JSON sesuai skema: summaryText satu kalimat; observations berisi paling banyak tiga pengamatan singkat tanpa markdown.',
-            },
-            {
-              role: 'user',
-              content: `Data agregat sesi: ${JSON.stringify(
-                buildAiSummaryInput({
-                  mode: summary.session.mode,
-                  ruleVersion: summary.session.ruleVersion.version,
-                  completedAt: summary.session.completedAt,
-                  score: summary.session.result.score,
-                  metrics,
-                }),
-              )}`,
-            },
-          ],
-        }),
-      });
-      if (!response.ok) throw new Error('Ollama request failed');
-
-      const envelope = OllamaResponseSchema.parse(await response.json());
-      const output = parseGroundedSummaryOutput(
-        summary.session.mode,
-        JSON.parse(envelope.message.content),
+      const messages = [
+        {
+          role: 'system',
+          content:
+            'Tulis ringkasan hasil permainan dalam bahasa Indonesia yang singkat, netral, dan mudah dipahami. Gunakan hanya data agregat yang diberikan. Jangan menyebut identitas, membuat diagnosis medis, atau memberi saran klinis. Balas JSON sesuai skema: summaryText satu kalimat; observations berisi paling banyak tiga pengamatan singkat tanpa markdown.',
+        },
+        {
+          role: 'user',
+          content: `Data agregat sesi: ${JSON.stringify(
+            buildAiSummaryInput({
+              mode: summary.session.mode,
+              ruleVersion: summary.session.ruleVersion.version,
+              completedAt: summary.session.completedAt,
+              score: summary.session.result.score,
+              metrics,
+            }),
+          )}`,
+        },
+      ];
+      const openAiCompatible = env.OLLAMA_PROVIDER === 'openai';
+      const response = await fetch(
+        openAiCompatible
+          ? `${env.OLLAMA_BASE_URL}/chat/completions`
+          : `${env.OLLAMA_BASE_URL}/api/chat`,
+        {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            ...(openAiCompatible ? { authorization: `Bearer ${env.OLLAMA_API_KEY}` } : {}),
+          },
+          signal: controller.signal,
+          body: JSON.stringify(
+            openAiCompatible
+              ? {
+                  model: env.OLLAMA_MODEL,
+                  messages,
+                  temperature: 0.2,
+                  response_format: { type: 'json_object' },
+                }
+              : {
+                  model: env.OLLAMA_MODEL,
+                  stream: false,
+                  format: SUMMARY_FORMAT,
+                  options: { temperature: 0.2 },
+                  messages,
+                },
+          ),
+        },
       );
+      if (!response.ok) throw new Error('AI summary request failed');
+
+      const responseBody: unknown = await response.json();
+      const content = openAiCompatible
+        ? OpenAiResponseSchema.parse(responseBody).choices[0]!.message.content
+        : OllamaResponseSchema.parse(responseBody).message.content;
+      const output = parseGroundedSummaryOutput(summary.session.mode, JSON.parse(content));
       if (leaseLost) throw new LeaseLostError();
       return output;
     } catch (error) {

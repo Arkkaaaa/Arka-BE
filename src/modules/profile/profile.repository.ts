@@ -16,11 +16,11 @@ export class ProfileRepository {
     data: ProfileUpdateData,
   ): Promise<void> {
     return this.prisma.$transaction(async (tx) => {
-      await tx.user.update({
+      await tx.msUser.update({
         where: { id: context.actorUserId, institutionId: context.institutionId },
         data: { name: data.name, image: data.image },
       });
-      await tx.institution.update({
+      await tx.msInstitution.update({
         where: { id: context.institutionId },
         data: { name: data.institutionName },
       });

@@ -252,11 +252,15 @@ export class DeviceRealtimeGateway {
 
           if (!hello) {
             const parsedHello = DeviceHelloSchema.safeParse(message);
-            if (!parsedHello.success || !this.dependencies.env.MODE3_DEVICE_SECRET_BASE64) {
+            if (!parsedHello.success) {
               closeProtocol(socket, 'Identitas perangkat ditolak');
               return;
             }
             hello = parsedHello.data;
+            if (!this.dependencies.env.DEVICE_SECRET_BASE64) {
+              closeProtocol(socket, 'Identitas perangkat ditolak');
+              return;
+            }
             const challenge = await issueDeviceChallenge(this.dependencies.redis, hello);
             send(
               socket,
@@ -274,7 +278,7 @@ export class DeviceRealtimeGateway {
 
           if (!connection) {
             const prove = DeviceProveSchema.safeParse(message);
-            const secret = this.dependencies.env.MODE3_DEVICE_SECRET_BASE64;
+            const secret = this.dependencies.env.DEVICE_SECRET_BASE64;
             if (
               !prove.success ||
               !secret ||

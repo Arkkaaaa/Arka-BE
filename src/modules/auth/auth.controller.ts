@@ -76,13 +76,13 @@ export class AuthController {
       const institutionName = validateRegistrationInstitutionName(rawName);
 
       const institution = await this.prisma.$transaction(async (tx) => {
-        const user = await tx.user.findUnique({
+        const user = await tx.msUser.findUnique({
           where: { id: auth.userId },
           select: { institutionId: true, institution: { select: { id: true, name: true } } },
         });
         if (!user) throw new AppError(401, 'unauthorized', 'Sesi tidak lagi berlaku.');
         if (user.institution) return user.institution;
-        const googleAccount = await tx.account.findFirst({
+        const googleAccount = await tx.msAccount.findFirst({
           where: { userId: auth.userId, providerId: 'google' },
           select: { id: true },
         });
@@ -90,11 +90,11 @@ export class AuthController {
           throw new AppError(403, 'oauth_onboarding_required', 'Onboarding ini hanya untuk akun Google.');
         }
 
-        const created = await tx.institution.create({
+        const created = await tx.msInstitution.create({
           data: { name: institutionName, status: 'ACTIVE' },
           select: { id: true, name: true },
         });
-        const updated = await tx.user.updateMany({
+        const updated = await tx.msUser.updateMany({
           where: { id: auth.userId, institutionId: null },
           data: { institutionId: created.id },
         });

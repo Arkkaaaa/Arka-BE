@@ -23,7 +23,7 @@ export interface AuditEvent {
   metadata?: AuditMetadata;
 }
 
-type AuditDb = Pick<PrismaClient, 'auditLog'> | Prisma.TransactionClient;
+type AuditDb = Pick<PrismaClient, 'trAuditLog'> | Prisma.TransactionClient;
 
 const SENSITIVE_METADATA_KEY =
   /(?:authorization|cookie|password|secret|token|credential|proof|participantreference|displayname|telemetry|fsrraw|prompt|response)/iu;
@@ -54,7 +54,7 @@ export async function writeAudit(
   context: AuditContext,
   event: AuditEvent,
 ): Promise<void> {
-  const data: Prisma.AuditLogUncheckedCreateInput = {
+  const data: Prisma.TrAuditLogUncheckedCreateInput = {
     action: event.action,
     outcome: event.outcome ?? 'SUCCESS',
     ...(context.institutionId === undefined ? {} : { institutionId: context.institutionId }),
@@ -65,5 +65,5 @@ export async function writeAudit(
     ...(event.targetId === undefined ? {} : { targetId: event.targetId }),
     ...(event.metadata === undefined ? {} : { metadata: redactAuditValue(event.metadata) }),
   };
-  await db.auditLog.create({ data });
+  await db.trAuditLog.create({ data });
 }

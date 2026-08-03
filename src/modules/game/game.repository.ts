@@ -29,7 +29,7 @@ export class GameRepository {
     institutionId: string,
     participantReference: string,
   ): Promise<string | null> {
-    const participant = await this.prisma.participant.findFirst({
+    const participant = await this.prisma.msParticipant.findFirst({
       where: { institutionId, participantReference },
       select: { status: true },
     });
@@ -40,7 +40,7 @@ export class GameRepository {
     institutionId: string,
     sessionId: string,
   ): Promise<PersistedGameSession | null> {
-    return this.prisma.gameSession.findFirst({
+    return this.prisma.trGameSession.findFirst({
       where: { id: sessionId, institutionId },
       select: {
         id: true,

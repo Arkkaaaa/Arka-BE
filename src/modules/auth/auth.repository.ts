@@ -17,7 +17,7 @@ export class AuthRepository {
     userId: string,
     institutionId: string,
   ): Promise<SessionExpiryRecord | null> {
-    return this.prisma.session.findFirst({
+    return this.prisma.trSession.findFirst({
       where: {
         id: ownerSessionId,
         userId,
@@ -28,7 +28,7 @@ export class AuthRepository {
   }
 
   public async findSessionIdentity(ownerSessionId: string): Promise<SessionIdentityRecord | null> {
-    const session = await this.prisma.session.findUnique({
+    const session = await this.prisma.trSession.findUnique({
       where: { id: ownerSessionId },
       select: { userId: true, user: { select: { institutionId: true } } },
     });
@@ -37,7 +37,7 @@ export class AuthRepository {
   }
 
   public async listActiveGameOwnerSessionIds(): Promise<readonly string[]> {
-    const sessions = await this.prisma.gameSession.findMany({
+    const sessions = await this.prisma.trGameSession.findMany({
       where: { status: { in: ['BINDING', 'COUNTDOWN', 'PLAYING', 'PAUSED'] } },
       select: { ownerSessionId: true },
       distinct: ['ownerSessionId'],
@@ -47,7 +47,7 @@ export class AuthRepository {
 
 
   public async deleteExpiredSession(ownerSessionId: string, now: Date): Promise<boolean> {
-    const deleted = await this.prisma.session.deleteMany({
+    const deleted = await this.prisma.trSession.deleteMany({
       where: { id: ownerSessionId, expiresAt: { lte: now } },
     });
     return deleted.count === 1;
