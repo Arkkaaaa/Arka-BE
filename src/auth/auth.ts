@@ -1,4 +1,4 @@
-import { betterAuth, getCurrentAdapter } from 'better-auth';
+import { betterAuth, getCurrentAdapter, type BetterAuthPlugin } from 'better-auth';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 import { APIError, createAuthMiddleware } from 'better-auth/api';
 import { openAPI } from 'better-auth/plugins';
@@ -31,6 +31,20 @@ export interface Auth {
   };
 }
 
+const institutionSchemaPlugin = {
+  id: 'institution-schema',
+  schema: {
+    institution: {
+      modelName: 'msInstitution',
+      disableMigration: true,
+      fields: {
+        name: { type: 'string', required: true },
+        status: { type: 'string', required: true },
+      },
+    },
+  },
+} satisfies BetterAuthPlugin;
+
 export function createAuth(prisma: PrismaClient, env: Env): Auth {
   return betterAuth({
     appName: 'Arka',
@@ -38,7 +52,7 @@ export function createAuth(prisma: PrismaClient, env: Env): Auth {
     secret: env.BETTER_AUTH_SECRET,
     trustedOrigins: [...env.browserOrigins],
     database: prismaAdapter(prisma, { provider: 'postgresql', transaction: true }),
-    plugins: [openAPI({ disableDefaultReference: true })],
+    plugins: [institutionSchemaPlugin, openAPI({ disableDefaultReference: true })],
     hooks: {
       before: createAuthMiddleware((context) => {
         if (context.path !== '/sign-up/email') return Promise.resolve();
@@ -101,7 +115,7 @@ export function createAuth(prisma: PrismaClient, env: Env): Auth {
               { name: string; status: 'ACTIVE' },
               { id: string }
             >({
-              model: 'msInstitution',
+              model: 'institution',
               data: { name: institutionName, status: 'ACTIVE' },
               select: ['id'],
             });
@@ -117,7 +131,7 @@ export function createAuth(prisma: PrismaClient, env: Env): Auth {
       },
     },
     user: {
-      modelName: 'MsUser',
+      modelName: 'msUser',
       additionalFields: {
         institutionId: {
           type: 'string',
@@ -128,15 +142,15 @@ export function createAuth(prisma: PrismaClient, env: Env): Auth {
       },
     },
     session: {
-      modelName: 'TrSession',
+      modelName: 'trSession',
       expiresIn: 8 * 60 * 60,
       updateAge: 15 * 60,
     },
     account: {
-      modelName: 'MsAccount',
+      modelName: 'msAccount',
     },
     verification: {
-      modelName: 'TrVerification',
+      modelName: 'trVerification',
     },
     advanced: {
       useSecureCookies: env.NODE_ENV === 'production',

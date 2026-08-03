@@ -308,13 +308,30 @@ function createCalibrationState(): CalibrationWindowState {
   return { baselineWindow: [], activeWindow: [], activeCursor: 0 };
 }
 
+function calibrationMedian(samples: readonly number[]): number {
+  const sorted = [...samples].sort((left, right) => left - right);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? ((sorted[middle - 1] as number) + (sorted[middle] as number)) / 2
+    : (sorted[middle] as number);
+}
+
 function appendCalibrationSample(
   state: CalibrationWindowState,
   raw: number,
   baselineLimit: number,
   activeLimit: number,
+  minimumDeltaRaw: number,
 ): void {
   if (state.baselineWindow.length < baselineLimit) {
+    state.baselineWindow.push(raw);
+    return;
+  }
+  if (
+    state.activeWindow.length === 0 &&
+    raw < calibrationMedian(state.baselineWindow) + minimumDeltaRaw
+  ) {
+    state.baselineWindow.shift();
     state.baselineWindow.push(raw);
     return;
   }
@@ -525,6 +542,24 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     });
     if (!lock) throw new AppError(409, 'device_reserved', 'Perangkat sedang digunakan.');
 
+    const runtime: PreparationRuntime = {
+      preparationId,
+      setupId,
+      mode: input.mode,
+      lockId: lock.lockId,
+      config,
+      state: 'BINDING_SETUP',
+      setupBound: false,
+      checkedButton: null,
+      calibrationState: input.mode === 'SEQUENCE_MEMORY' ? null : createCalibrationState(),
+      calibration: null,
+      edge: { pressed: false, armed: true },
+      practice: [],
+      practiceIndex: 0,
+      practicePressed: false,
+      practiceDeadlineMs: null,
+      lastInput: null,
+    };
     let preparation;
     try {
       const participant = input.participantReference
@@ -558,6 +593,9 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         type: 'SETUP',
         state: 'BINDING',
       });
+      await this.savePreparation(runtime);
+      this.#activeSetups.add(setupId);
+      await this.publishPreparation(runtime);
       await enqueueMode3Command(this.dependencies.redis, {
         lockId: lock.lockId,
         associationId: setupId,
@@ -568,30 +606,11 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         ),
       });
     } catch (error) {
+      this.#activeSetups.delete(setupId);
+      await this.dependencies.redis.del(prepKey(setupId));
       await clearMode3Ownership(this.dependencies.redis, lock.lockId);
       throw error;
     }
-    const runtime: PreparationRuntime = {
-      preparationId,
-      setupId,
-      mode: input.mode,
-      lockId: lock.lockId,
-      config,
-      state: 'BINDING_SETUP',
-      setupBound: false,
-      checkedButton: null,
-      calibrationState: input.mode === 'SEQUENCE_MEMORY' ? null : createCalibrationState(),
-      calibration: null,
-      edge: { pressed: false, armed: true },
-      practice: [],
-      practiceIndex: 0,
-      practicePressed: false,
-      practiceDeadlineMs: null,
-      lastInput: null,
-    };
-    await this.savePreparation(runtime);
-    this.#activeSetups.add(setupId);
-    await this.publishPreparation(runtime);
     return PreparationDtoSchema.parse({
       preparationId,
       setupId,
@@ -727,20 +746,6 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       });
       throw error;
     }
-    await updateMode3AssociationState(
-      this.dependencies.redis,
-      'SETUP',
-      preparation.setupId,
-      sessionLock.lockId,
-      'UNBINDING',
-    );
-    await enqueueMode3Command(this.dependencies.redis, {
-      lockId: sessionLock.lockId,
-      associationId: preparation.setupId,
-      kind: 'SETUP_UNBIND',
-      payload: {},
-      expiresAt: bindingDeadlineAt,
-    });
     const runtime: SessionRuntime = {
       sessionId,
       mode: preparation.mode,
@@ -762,10 +767,24 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       lastInput: null,
     };
     await this.saveSession(runtime);
-    await this.dependencies.redis.del(prepKey(preparation.setupId));
-    this.#activeSetups.delete(preparation.setupId);
     this.#activeSessions.add(sessionId);
     await this.publishSession(runtime, 'Menunggu perangkat dan pendamping.');
+    await updateMode3AssociationState(
+      this.dependencies.redis,
+      'SETUP',
+      preparation.setupId,
+      sessionLock.lockId,
+      'UNBINDING',
+    );
+    await enqueueMode3Command(this.dependencies.redis, {
+      lockId: sessionLock.lockId,
+      associationId: preparation.setupId,
+      kind: 'SETUP_UNBIND',
+      payload: {},
+      expiresAt: bindingDeadlineAt,
+    });
+    await this.dependencies.redis.del(prepKey(preparation.setupId));
+    this.#activeSetups.delete(preparation.setupId);
     return response;
   }
 
@@ -1101,6 +1120,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
           raw,
           rule.baselineMinimumSamples,
           rule.activeMinimumSamples,
+          rule.minimumDeltaRaw,
         );
         const calibration = calibrateMotorGrip(
           runtime.calibrationState.baselineWindow,
@@ -1123,6 +1143,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
           raw,
           rule.releaseMinimumSamples,
           rule.pressMinimumSamples,
+          rule.minimumDeltaRaw,
         );
         const calibration = calibrateGoNoGo(
           runtime.calibrationState.baselineWindow,
@@ -1966,13 +1987,25 @@ export class AuthoritativeRuntime implements RuntimeGateway {
 
   private async publishPreparation(runtime: PreparationRuntime): Promise<void> {
     const trial = runtime.practice[runtime.practiceIndex];
+    const baselineMinimumSamples = runtime.mode === 'MOTOR_GRIP'
+      ? MotorRuleSchema.parse(runtime.config).baselineMinimumSamples
+      : runtime.mode === 'GO_NO_GO'
+        ? GoNoGoRuleSchema.parse(runtime.config).releaseMinimumSamples
+        : 0;
+    const collectingBaseline =
+      runtime.calibrationState !== null &&
+      runtime.calibrationState.baselineWindow.length < baselineMinimumSamples;
     const instruction =
       runtime.state === 'BINDING_SETUP'
         ? 'Menghubungkan perangkat.'
         : runtime.state === 'CALIBRATING'
           ? runtime.mode === 'SEQUENCE_MEMORY'
             ? 'Tekan satu tombol untuk memastikan perangkat merespons.'
-            : 'Ikuti petunjuk kalibrasi dengan nyaman.'
+            : collectingBaseline
+              ? 'Lepaskan alat dan diamkan selama satu detik.'
+              : runtime.mode === 'MOTOR_GRIP'
+                ? 'Sekarang genggam kuat dengan nyaman dan tahan selama dua detik.'
+                : 'Sekarang genggam ringan dan tahan selama satu detik.'
           : runtime.state === 'PRACTICING'
             ? 'Latihan: genggam hanya saat Wayang muncul.'
             : runtime.state === 'READY'
