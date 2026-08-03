@@ -59,9 +59,12 @@ export interface GoNoGoTransition {
   readonly state: GoNoGoState;
   readonly acceptedPress: boolean;
   readonly visual: {
+    mode: 'GO_NO_GO';
     trialNumber: number;
     stimulus: GoNoGoStimulus | null;
     phase: 'STIMULUS' | 'FEEDBACK';
+    activeElapsedMs: number;
+    remainingMs: number;
     feedback: 'CORRECT' | 'MISS' | 'FALSE_POSITIVE' | 'WAIT' | null;
     correctTrials: number;
   };
@@ -246,13 +249,26 @@ function transition(state: GoNoGoState, acceptedPress: boolean): GoNoGoTransitio
       : state.firstPressAtMs !== null
         ? 'WAIT'
         : null;
+  const totalDurationMs = state.config.totalTrials * state.config.trialDurationMs;
+  const remainingCurrentTrialMs = state.lifecycle === 'PAUSED'
+    ? (state.pauseRemainingMs ?? state.config.trialDurationMs)
+    : Math.max(0, state.responseClosesAtMs - state.lastNowMs);
+  const currentTrialElapsedMs = clamp(
+    state.config.trialDurationMs - remainingCurrentTrialMs,
+    0,
+    state.config.trialDurationMs,
+  );
+  const activeElapsedMs = Math.min(totalDurationMs, state.trials.length * state.config.trialDurationMs + currentTrialElapsedMs);
   return {
     state,
     acceptedPress,
     visual: {
+      mode: 'GO_NO_GO',
       trialNumber: Math.min(state.currentTrialIndex + 1, state.plan.length),
       stimulus: current?.stimulus ?? null,
       phase: state.lifecycle === 'COMPLETED' ? 'FEEDBACK' : 'STIMULUS',
+      activeElapsedMs,
+      remainingMs: Math.max(0, totalDurationMs - activeElapsedMs),
       feedback,
       correctTrials,
     },

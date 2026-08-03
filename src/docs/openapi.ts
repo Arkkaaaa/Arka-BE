@@ -1080,15 +1080,26 @@ export const arkaOpenApi = {
         required: ['command'],
         properties: { command: { type: 'string', enum: ['PAUSE', 'RESUME', 'ABORT'] } },
       },
+      MotorGripSample: {
+        type: 'object',
+        required: ['elapsedSecond', 'gripPercent', 'kilograms'],
+        properties: {
+          elapsedSecond: { type: 'integer', minimum: 1, maximum: 30 },
+          gripPercent: { type: 'number', minimum: 0, maximum: 100 },
+          kilograms: { type: 'number', minimum: 0, maximum: 5 },
+        },
+      },
       MotorGripMetrics: {
         type: 'object',
-        required: ['mode', 'peakGripPercent', 'continuousHoldMs', 'targetCompleted', 'sessionElapsedMs'],
+        required: ['mode', 'peakGripPercent', 'peakKilograms', 'continuousHoldMs', 'targetCompleted', 'sessionElapsedMs', 'gripSamples'],
         properties: {
           mode: { type: 'string', const: 'MOTOR_GRIP' },
           peakGripPercent: { type: 'number', minimum: 0, maximum: 100 },
+          peakKilograms: { type: 'number', minimum: 0, maximum: 5 },
           continuousHoldMs: { type: 'integer', minimum: 0, maximum: 5000 },
           targetCompleted: { type: 'boolean' },
           sessionElapsedMs: { type: 'integer', minimum: 0, maximum: 30000 },
+          gripSamples: { type: 'array', maxItems: 30, items: ref('MotorGripSample') },
         },
       },
       GoNoGoMetrics: {
@@ -1364,18 +1375,21 @@ export const arkaOpenApi = {
       },
       MotorGripVisual: {
         type: 'object',
-        required: ['mode', 'gripPercent', 'holdProgressMs', 'activeElapsedMs', 'message'],
+        required: ['mode', 'gripPercent', 'kilograms', 'holdProgressMs', 'activeElapsedMs', 'remainingMs', 'gripSamples', 'message'],
         properties: {
           mode: { type: 'string', const: 'MOTOR_GRIP' },
           gripPercent: { type: 'number', minimum: 0, maximum: 100 },
+          kilograms: { type: 'number', minimum: 0, maximum: 5 },
           holdProgressMs: { type: 'integer', minimum: 0, maximum: 5000 },
           activeElapsedMs: { type: 'integer', minimum: 0, maximum: 30000 },
+          remainingMs: { type: 'integer', minimum: 0, maximum: 30000 },
+          gripSamples: { type: 'array', maxItems: 30, items: ref('MotorGripSample') },
           message: { type: 'string' },
         },
       },
       GoNoGoVisual: {
         type: 'object',
-        required: ['mode', 'trialNumber', 'stimulus', 'phase', 'feedback', 'correctTrials'],
+        required: ['mode', 'trialNumber', 'stimulus', 'phase', 'activeElapsedMs', 'remainingMs', 'feedback', 'correctTrials'],
         properties: {
           mode: { type: 'string', const: 'GO_NO_GO' },
           trialNumber: { type: 'integer', minimum: 0, maximum: 40 },
@@ -1384,6 +1398,8 @@ export const arkaOpenApi = {
             enum: ['WAYANG', 'BATIK', 'CANDI', 'MONAS', 'ANGKLUNG', null],
           },
           phase: { type: 'string', enum: ['WAITING', 'STIMULUS', 'FEEDBACK'] },
+          activeElapsedMs: { type: 'integer', minimum: 0, maximum: 120000 },
+          remainingMs: { type: 'integer', minimum: 0, maximum: 120000 },
           feedback: {
             type: ['string', 'null'],
             enum: ['CORRECT', 'MISS', 'FALSE_POSITIVE', 'WAIT', null],

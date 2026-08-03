@@ -10,12 +10,20 @@ export interface MotorGripConfig {
   telemetryGapMs: number;
 }
 
+export interface MotorGripSample {
+  elapsedSecond: number;
+  gripPercent: number;
+  kilograms: number;
+}
+
 export interface MotorGripMetrics {
   mode: 'MOTOR_GRIP';
   peakGripPercent: number;
+  peakKilograms: number;
   continuousHoldMs: number;
   targetCompleted: boolean;
   sessionElapsedMs: number;
+  gripSamples: MotorGripSample[];
 }
 
 export interface MotorGripState {
@@ -25,7 +33,10 @@ export interface MotorGripState {
   readonly lastNowMs: number;
   readonly activeElapsedMs: number;
   readonly lastGripPercent: number;
+  readonly lastKilograms: number;
   readonly peakGripPercent: number;
+  readonly peakKilograms: number;
+  readonly gripSamples: readonly MotorGripSample[];
   readonly currentHoldMs: number;
   readonly longestHoldMs: number;
   readonly lastSampleAtMs: number;
@@ -35,9 +46,13 @@ export interface MotorGripState {
 export type MotorGripTransition = {
   readonly state: MotorGripState;
   readonly visual: {
+    mode: 'MOTOR_GRIP';
     gripPercent: number;
+    kilograms: number;
     holdProgressMs: number;
     activeElapsedMs: number;
+    remainingMs: number;
+    gripSamples: readonly MotorGripSample[];
     message: string;
   };
   readonly completed: EngineCompletion<MotorGripMetrics> | null;
@@ -77,12 +92,20 @@ export function createMotorGrip(config: MotorGripConfig, nowMs: number): MotorGr
     lastNowMs: nowMs,
     activeElapsedMs: 0,
     lastGripPercent: 0,
+    lastKilograms: 0,
     peakGripPercent: 0,
+    peakKilograms: 0,
+    gripSamples: [],
     currentHoldMs: 0,
     longestHoldMs: 0,
     lastSampleAtMs: nowMs,
     completion: null,
   };
+}
+
+export function rawToKilograms(raw: number): number {
+  if (!Number.isInteger(raw) || raw < 0 || raw > 4095) throw new RangeError('Invalid FSR sample');
+  return (raw / 4095) * 5;
 }
 
 export function normalizeGrip(
@@ -113,9 +136,11 @@ function complete(state: MotorGripState): MotorGripState {
   const metrics: MotorGripMetrics = {
     mode: 'MOTOR_GRIP',
     peakGripPercent: state.peakGripPercent,
+    peakKilograms: state.peakKilograms ?? 0,
     continuousHoldMs,
     targetCompleted,
     sessionElapsedMs: state.activeElapsedMs,
+    gripSamples: [...state.gripSamples],
   };
   const score = clamp(
     (targetCompleted ? 500 : 0) +
@@ -145,19 +170,27 @@ function advance(state: MotorGripState, nowMs: number): MotorGripState {
     currentHoldMs = Math.min(state.config.targetHoldMs, currentHoldMs + deltaMs);
     longestHoldMs = Math.max(longestHoldMs, currentHoldMs);
   }
+  const activeElapsedMs = state.activeElapsedMs + deltaMs;
+  const previousSecond = Math.floor(state.activeElapsedMs / 1_000);
+  const currentSecond = Math.floor(activeElapsedMs / 1_000);
+  const stale = nowMs - state.lastSampleAtMs > state.config.telemetryGapMs;
+  const gripSamples = [...(state.gripSamples ?? [])];
+  for (let elapsedSecond = previousSecond + 1; elapsedSecond <= currentSecond; elapsedSecond += 1) {
+    gripSamples.push({
+      elapsedSecond,
+      gripPercent: stale ? 0 : state.lastGripPercent,
+      kilograms: stale ? 0 : (state.lastKilograms ?? 0),
+    });
+  }
   let next: MotorGripState = {
     ...state,
     lastNowMs: nowMs,
-    activeElapsedMs: state.activeElapsedMs + deltaMs,
+    activeElapsedMs,
     currentHoldMs,
     longestHoldMs,
+    gripSamples,
   };
-  if (
-    currentHoldMs >= state.config.targetHoldMs ||
-    next.activeElapsedMs >= state.config.sessionDurationMs
-  ) {
-    next = complete(next);
-  }
+  if (next.activeElapsedMs >= state.config.sessionDurationMs) next = complete(next);
   return next;
 }
 
@@ -174,9 +207,13 @@ function transition(state: MotorGripState): MotorGripTransition {
   return {
     state,
     visual: {
+      mode: 'MOTOR_GRIP',
       gripPercent: state.lastGripPercent,
+      kilograms: state.lastKilograms ?? 0,
       holdProgressMs: state.currentHoldMs,
       activeElapsedMs: state.activeElapsedMs,
+      remainingMs: Math.max(0, state.config.sessionDurationMs - state.activeElapsedMs),
+      gripSamples: state.gripSamples ?? [],
       message,
     },
     completed: state.completion,
@@ -192,6 +229,7 @@ export function sampleMotorGrip(
   if (next.lifecycle !== 'PLAYING') return transition(next);
 
   const gripPercent = normalizeGrip(raw, next.config);
+  const kilograms = rawToKilograms(raw);
   const wasAbove = next.lastGripPercent >= next.config.sustainThreshold;
   const isAbove = gripPercent >= next.config.sustainThreshold;
   let currentHoldMs = next.currentHoldMs;
@@ -205,7 +243,9 @@ export function sampleMotorGrip(
   next = {
     ...next,
     lastGripPercent: gripPercent,
+    lastKilograms: kilograms,
     peakGripPercent: Math.max(next.peakGripPercent, gripPercent),
+    peakKilograms: Math.max(next.peakKilograms, kilograms),
     currentHoldMs,
     lastSampleAtMs: nowMs,
   };
@@ -230,6 +270,7 @@ export function resumeMotorGrip(state: MotorGripState, nowMs: number): MotorGrip
     lifecycle: 'PLAYING',
     lastNowMs: nowMs,
     lastGripPercent: 0,
+    lastKilograms: 0,
     currentHoldMs: 0,
   });
 }

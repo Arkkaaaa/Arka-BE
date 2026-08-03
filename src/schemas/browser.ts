@@ -320,12 +320,19 @@ export type CreateGameSessionResponse = z.infer<typeof CreateGameSessionResponse
 export const SessionCommandSchema = z.enum(['PAUSE', 'RESUME', 'ABORT']);
 export const SessionStatusPatchRequestSchema = z.object({ command: SessionCommandSchema });
 
+export const MotorGripSampleSchema = z.object({
+  elapsedSecond: z.number().int().min(1).max(30),
+  gripPercent: z.number().min(0).max(100),
+  kilograms: z.number().min(0).max(5),
+});
 export const MotorGripMetricsSchema = z.object({
   mode: z.literal('MOTOR_GRIP'),
   peakGripPercent: z.number().min(0).max(100),
+  peakKilograms: z.number().min(0).max(5).optional().default(0),
   continuousHoldMs: z.number().int().min(0).max(5000),
   targetCompleted: z.boolean(),
   sessionElapsedMs: z.number().int().min(0).max(30000),
+  gripSamples: z.array(MotorGripSampleSchema).max(30).optional().default([]),
 });
 export const GoNoGoMetricsSchema = z.object({
   mode: z.literal('GO_NO_GO'),

@@ -27,7 +27,10 @@ interface AiSummaryInputSource {
 }
 
 export function buildAiSummaryInput(source: AiSummaryInputSource) {
-  const { mode, ...aggregateMetrics } = source.metrics;
+  const { mode, ...metrics } = source.metrics;
+  const aggregateMetrics = mode === 'MOTOR_GRIP'
+    ? Object.fromEntries(Object.entries(metrics).filter(([key]) => key !== 'gripSamples'))
+    : metrics;
   if (mode !== source.mode) throw new TypeError('Metric mode mismatch');
   const sessionHour = new Date(source.completedAt);
   sessionHour.setUTCMinutes(0, 0, 0);

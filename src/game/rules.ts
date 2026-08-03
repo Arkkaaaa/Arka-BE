@@ -2,13 +2,14 @@ import { isDeepStrictEqual } from 'node:util';
 import { GameMode, Prisma, type PrismaClient } from '../generated/prisma/client.js';
 
 export const GAME_RULE_VERSION = 'mvp-1.4.0';
+const MOTOR_GRIP_RULE_VERSION = 'mvp-1.5.0';
 const SEQUENCE_MEMORY_RULE_VERSION = 'mvp-1.7.0';
 const OWNER_PRESENCE_GRACE_MS = 30_000;
 
 export const GAME_RULES = [
   {
     mode: GameMode.MOTOR_GRIP,
-    version: GAME_RULE_VERSION,
+    version: MOTOR_GRIP_RULE_VERSION,
     config: {
       baselineMinimumSamples: 10,
       activeMinimumSamples: 20,

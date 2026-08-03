@@ -39,8 +39,11 @@ export const SessionVisualSchema = z.discriminatedUnion('mode', [
   z.object({
     mode: z.literal('MOTOR_GRIP'),
     gripPercent: z.number().min(0).max(100),
+    kilograms: z.number().min(0).max(5).optional().default(0),
     holdProgressMs: z.number().int().min(0).max(5000),
     activeElapsedMs: z.number().int().min(0).max(30000),
+    remainingMs: z.number().int().min(0).max(30000).optional().default(30000),
+    gripSamples: z.array(z.object({ elapsedSecond: z.number().int().min(1).max(30), gripPercent: z.number().min(0).max(100), kilograms: z.number().min(0).max(5) })).max(30).optional().default([]),
     message: z.string(),
   }),
   z.object({
@@ -48,6 +51,8 @@ export const SessionVisualSchema = z.discriminatedUnion('mode', [
     trialNumber: z.number().int().min(0).max(40),
     stimulus: z.enum(['WAYANG', 'BATIK', 'CANDI', 'MONAS', 'ANGKLUNG']).nullable(),
     phase: z.enum(['WAITING', 'STIMULUS', 'FEEDBACK']),
+    activeElapsedMs: z.number().int().min(0).max(120000).optional().default(0),
+    remainingMs: z.number().int().min(0).max(120000).optional().default(120000),
     feedback: z.enum(['CORRECT', 'MISS', 'FALSE_POSITIVE', 'WAIT']).nullable(),
     correctTrials: z.number().int().nonnegative(),
   }),
