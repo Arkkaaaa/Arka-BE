@@ -6,14 +6,15 @@ import type { Logger } from '../config/logger.js';
 import type { PrismaClient } from '../generated/prisma/client.js';
 
 const INDONESIAN_CUE =
-  /\b(?:adalah|agar|atau|baik|belum|cepat|cukup|dalam|dan|dapat|dengan|di|dari|genggaman|hasil|ini|juga|karena|ke|kinerja|konsisten|lambat|lebih|memori|menunjukkan|performa|permainan|perlu|pada|reaksi|respons|ringkasan|sesi|skor|stabil|sudah|target|tercatat|tidak|tingkat|untuk|yang)\b/iu;
+  /\b(?:adalah|agar|akurasi|atau|baik|belum|buah|cepat|cukup|dalam|dan|dapat|dengan|di|dari|durasi|genggaman|hasil|ini|juga|karena|ke|kilogram|kinerja|konsisten|lambat|level|lebih|memori|mencapai|menunjukkan|performa|permainan|perlu|pada|rata-rata|reaksi|respons|ringkasan|sesi|skor|stabil|stimulus|sudah|target|tercatat|tidak|tingkat|untuk|yang)\b/iu;
 const PLAIN_TEXT = /^[\p{L}\p{N} ,.;:!?()%'’-]+$/u;
 const PROHIBITED_SUMMARY_TEXT =
-  /(?:<[^>]*>|\[[^\]]*\]\([^)]*\)|(?:https?:\/\/|www\.|\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b)|\b(?:diagnos\w*|demensia|alzheimer|terapi|pengobatan|risiko|normal|abnormal|bahaya|sebaiknya|silakan|harus|lakukan|coba|tingkatkan|kurangi|konsultasikan)\b)/iu;
+  /(?:<[^>]*>|\[[^\]]*\]\([^)]*\)|(?:https?:\/\/|www\.|\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b)|\b(?:identitas|nama|diagnos\w*|demensia|alzheimer|medis|klinis|terapi|pengobatan|rekomendasi|saran|anjuran|risiko|normal|abnormal|bahaya|sebaiknya|silakan|harus|lakukan|coba|tingkatkan|kurangi|konsultasikan)\b)/iu;
 const METRIC_CUES = {
-  MOTOR_GRIP: /\b(?:skor|kekuatan puncak|tahanan kontinu|target|waktu permainan)\b/iu,
+  MOTOR_GRIP:
+    /\b(?:skor|buah|stroberi|tomat|pisang|jeruk|apel|semangka|kilogram|kg|kekuatan puncak|genggaman puncak|genggaman rata-rata|rata-rata genggaman|tahanan kontinu|waktu di atas target|target|waktu permainan)\b/iu,
   GO_NO_GO:
-    /\b(?:skor|total stimulus|stimulus target|stimulus non-target|respons tepat|belum merespons|false positive|berhasil menunggu|akurasi|waktu respons)\b/iu,
+    /\b(?:skor|level|tingkat|durasi stimulus|total stimulus|stimulus target|stimulus non-target|respons tepat|belum merespons|false positive|berhasil menunggu|akurasi|waktu respons)\b/iu,
   SEQUENCE_MEMORY:
     /\b(?:skor|urutan terpanjang|level selesai|attempt salah|timeout|tombol ganda|waktu respons|jeda antar tombol|alasan selesai)\b/iu,
 } as const;
@@ -44,15 +45,17 @@ export function buildAiSummaryInput(source: AiSummaryInputSource) {
 
 export function parseGroundedSummaryOutput(mode: GameMetrics['mode'], value: unknown) {
   const output = SummaryOutputSchema.parse(value);
-  for (const text of [output.summaryText, ...output.observations]) {
-    if (PROHIBITED_SUMMARY_TEXT.test(text) || !METRIC_CUES[mode].test(text) || !/\d/u.test(text)) {
-      throw new z.ZodError([
-        {
-          code: 'custom',
-          path: [],
-          message: 'Summary text must be nonclinical and grounded in an allowlisted metric',
-        },
-      ]);
+  for (const audience of [output.participant, output.clinician]) {
+    for (const text of [audience.summaryText, ...audience.observations]) {
+      if (PROHIBITED_SUMMARY_TEXT.test(text) || !METRIC_CUES[mode].test(text) || !/\d/u.test(text)) {
+        throw new z.ZodError([
+          {
+            code: 'custom',
+            path: [],
+            message: 'Summary text must be nonclinical and grounded in an allowlisted metric',
+          },
+        ]);
+      }
     }
   }
   return output;
@@ -74,10 +77,17 @@ function plainIndonesianText(maxLength: number) {
     );
 }
 
-const SummaryOutputSchema = z
+const AudienceSummarySchema = z
   .object({
     summaryText: plainIndonesianText(280),
     observations: z.array(plainIndonesianText(140)).max(3),
+  })
+  .strict();
+
+const SummaryOutputSchema = z
+  .object({
+    participant: AudienceSummarySchema,
+    clinician: AudienceSummarySchema,
   })
   .strict();
 
@@ -90,7 +100,7 @@ const OpenAiResponseSchema = z
   })
   .passthrough();
 
-const SUMMARY_FORMAT = {
+const AUDIENCE_SUMMARY_FORMAT = {
   type: 'object',
   additionalProperties: false,
   required: ['summaryText', 'observations'],
@@ -101,6 +111,16 @@ const SUMMARY_FORMAT = {
       maxItems: 3,
       items: { type: 'string', maxLength: 140 },
     },
+  },
+} as const;
+
+const SUMMARY_FORMAT = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['participant', 'clinician'],
+  properties: {
+    participant: AUDIENCE_SUMMARY_FORMAT,
+    clinician: AUDIENCE_SUMMARY_FORMAT,
   },
 } as const;
 
@@ -303,8 +323,8 @@ export class AiSummaryWorker {
           status: 'READY',
           leaseToken: null,
           leaseExpiresAt: null,
-          summaryText: output.summaryText,
-          observations: output.observations,
+          summaryText: output.participant.summaryText,
+          observations: output,
           unavailableReason: null,
         },
       });
@@ -397,7 +417,7 @@ export class AiSummaryWorker {
         {
           role: 'system',
           content:
-            'Tulis ringkasan hasil permainan dalam bahasa Indonesia yang singkat, netral, dan mudah dipahami. Gunakan hanya data agregat yang diberikan. Jangan menyebut identitas, membuat diagnosis medis, atau memberi saran klinis. Balas JSON sesuai skema: summaryText satu kalimat; observations berisi paling banyak tiga pengamatan singkat tanpa markdown.',
+            'Tulis dua ringkasan hasil permainan dalam bahasa Indonesia berdasarkan hanya metrik agregat yang diberikan. Balas JSON ketat sesuai skema dengan participant dan clinician, masing-masing berisi summaryText satu kalimat dan observations paling banyak tiga pengamatan singkat. Semua teks wajib faktual, menyebut angka dan nama metrik yang tersedia, tanpa markdown. Jangan menyebut atau menebak identitas, diagnosis, kondisi medis atau klinis, risiko, terapi, pengobatan, saran, anjuran, atau rekomendasi. Untuk participant gunakan bahasa sederhana, mudah dipahami, dan bernada menyemangati secara netral tanpa instruksi. Untuk clinician gunakan bahasa ringkas dan lebih berfokus pada angka metrik, tetapi tetap nonklinis.',
         },
         {
           role: 'user',

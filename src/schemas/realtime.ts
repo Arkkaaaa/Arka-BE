@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { DisplayNameSchema, GameModeSchema, SessionStatusSchema, UuidSchema } from './common.js';
+import { DisplayNameSchema, FruitVariantSchema, GameModeSchema, SessionStatusSchema, UuidSchema } from './common.js';
 import { GameResultDtoSchema, PreparationStateSchema, SessionCommandSchema } from './browser.js';
 
 const ClientBaseSchema = z.object({ protocolVersion: z.literal(1), messageId: UuidSchema });
@@ -44,15 +44,24 @@ export const SessionVisualSchema = z.discriminatedUnion('mode', [
     activeElapsedMs: z.number().int().min(0).max(30000),
     remainingMs: z.number().int().min(0).max(30000).optional().default(30000),
     gripSamples: z.array(z.object({ elapsedSecond: z.number().int().min(1).max(30), gripPercent: z.number().min(0).max(100), kilograms: z.number().min(0).max(5) })).max(30).optional().default([]),
+    fruitVariant: FruitVariantSchema,
+    targetKilograms: z.number().positive().max(5),
+    averageKilograms: z.number().min(0).max(5),
+    timeAtOrAboveTargetMs: z.number().int().min(0).max(30000),
     message: z.string(),
   }),
   z.object({
     mode: z.literal('GO_NO_GO'),
-    trialNumber: z.number().int().min(0).max(40),
+    trialNumber: z.number().int().min(0),
+    level: z.number().int().min(1).max(2),
+    levelTrialNumber: z.number().int().min(1),
+    levelTrialCount: z.number().int().positive(),
+    totalLevels: z.literal(2),
     stimulus: z.enum(['WAYANG', 'BATIK', 'CANDI', 'MONAS', 'ANGKLUNG']).nullable(),
-    phase: z.enum(['WAITING', 'STIMULUS', 'FEEDBACK']),
-    activeElapsedMs: z.number().int().min(0).max(120000).optional().default(0),
-    remainingMs: z.number().int().min(0).max(120000).optional().default(120000),
+    assetIndex: z.number().int().min(0).max(3).nullable(),
+    phase: z.enum(['TARGET_PREVIEW', 'TURN_CUE', 'STIMULUS', 'FEEDBACK']),
+    activeElapsedMs: z.number().int().min(0).max(180000).optional().default(0),
+    remainingMs: z.number().int().min(0).max(180000).optional().default(180000),
     feedback: z.enum(['CORRECT', 'MISS', 'FALSE_POSITIVE', 'WAIT']).nullable(),
     correctTrials: z.number().int().nonnegative(),
   }),

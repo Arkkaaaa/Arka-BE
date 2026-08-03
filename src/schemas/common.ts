@@ -2,6 +2,15 @@ import { z } from 'zod';
 
 export const GameModeSchema = z.enum(['MOTOR_GRIP', 'GO_NO_GO', 'SEQUENCE_MEMORY']);
 export type GameMode = z.infer<typeof GameModeSchema>;
+export const FruitVariantSchema = z.enum([
+  'STRAWBERRY',
+  'TOMATO',
+  'BANANA',
+  'ORANGE',
+  'APPLE',
+  'WATERMELON',
+]);
+export type FruitVariant = z.infer<typeof FruitVariantSchema>;
 
 export const SessionStatusSchema = z.enum([
   'BINDING',
@@ -41,8 +50,8 @@ export const DeviceReadinessCodeSchema = z.enum([
 ]);
 
 export const ModeLabel: Readonly<Record<GameMode, string>> = {
-  MOTOR_GRIP: 'Peras Jeruk',
-  GO_NO_GO: 'Tangkap Wayang',
+  MOTOR_GRIP: 'Peras Buah',
+  GO_NO_GO: 'Go-No-Go',
   SEQUENCE_MEMORY: 'Ding Dong Dong Nusantara',
 };
 

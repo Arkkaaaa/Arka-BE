@@ -1102,6 +1102,21 @@ export const arkaOpenApi = {
           gripSamples: { type: 'array', maxItems: 30, items: ref('MotorGripSample') },
         },
       },
+      GoNoGoLevelMetrics: {
+        type: 'object',
+        required: ['level', 'stimulusDurationMs', 'totalTrials', 'hits', 'misses', 'falsePositives', 'correctRejections', 'accuracyPercent', 'meanHitReactionMs'],
+        properties: {
+          level: { type: 'integer', minimum: 1, maximum: 2 },
+          stimulusDurationMs: { type: 'integer', minimum: 1 },
+          totalTrials: { type: 'integer', minimum: 0 },
+          hits: { type: 'integer', minimum: 0 },
+          misses: { type: 'integer', minimum: 0 },
+          falsePositives: { type: 'integer', minimum: 0 },
+          correctRejections: { type: 'integer', minimum: 0 },
+          accuracyPercent: { type: 'number', minimum: 0, maximum: 100 },
+          meanHitReactionMs: { type: ['number', 'null'], minimum: 0 },
+        },
+      },
       GoNoGoMetrics: {
         type: 'object',
         required: [
@@ -1127,6 +1142,7 @@ export const arkaOpenApi = {
           correctRejections: { type: 'integer', minimum: 0 },
           accuracyPercent: { type: 'number', minimum: 0, maximum: 100 },
           meanHitReactionMs: { type: ['number', 'null'], minimum: 0 },
+          levelBreakdown: { type: 'array', maxItems: 2, default: [], items: ref('GoNoGoLevelMetrics') },
         },
       },
       SequenceMemoryMetrics: {
@@ -1181,6 +1197,18 @@ export const arkaOpenApi = {
           },
         },
       },
+      AiAudienceSummary: {
+        type: 'object',
+        required: ['summaryText', 'observations'],
+        properties: {
+          summaryText: { type: 'string', maxLength: 280 },
+          observations: {
+            type: 'array',
+            maxItems: 3,
+            items: { type: 'string', maxLength: 140 },
+          },
+        },
+      },
       AiSummary: {
         oneOf: [
           {
@@ -1195,15 +1223,11 @@ export const arkaOpenApi = {
           },
           {
             type: 'object',
-            required: ['status', 'summaryText', 'observations'],
+            required: ['status', 'participant', 'clinician'],
             properties: {
               status: { type: 'string', const: 'READY' },
-              summaryText: { type: 'string', maxLength: 280 },
-              observations: {
-                type: 'array',
-                maxItems: 3,
-                items: { type: 'string', maxLength: 140 },
-              },
+              participant: ref('AiAudienceSummary'),
+              clinician: ref('AiAudienceSummary'),
             },
           },
         ],
@@ -1389,17 +1413,22 @@ export const arkaOpenApi = {
       },
       GoNoGoVisual: {
         type: 'object',
-        required: ['mode', 'trialNumber', 'stimulus', 'phase', 'activeElapsedMs', 'remainingMs', 'feedback', 'correctTrials'],
+        required: ['mode', 'trialNumber', 'level', 'levelTrialNumber', 'levelTrialCount', 'totalLevels', 'stimulus', 'assetIndex', 'phase', 'activeElapsedMs', 'remainingMs', 'feedback', 'correctTrials'],
         properties: {
           mode: { type: 'string', const: 'GO_NO_GO' },
-          trialNumber: { type: 'integer', minimum: 0, maximum: 40 },
+          trialNumber: { type: 'integer', minimum: 0 },
+          level: { type: 'integer', minimum: 1, maximum: 2 },
+          levelTrialNumber: { type: 'integer', minimum: 1 },
+          levelTrialCount: { type: 'integer', minimum: 1 },
+          totalLevels: { type: 'integer', const: 2 },
           stimulus: {
             type: ['string', 'null'],
             enum: ['WAYANG', 'BATIK', 'CANDI', 'MONAS', 'ANGKLUNG', null],
           },
-          phase: { type: 'string', enum: ['WAITING', 'STIMULUS', 'FEEDBACK'] },
-          activeElapsedMs: { type: 'integer', minimum: 0, maximum: 120000 },
-          remainingMs: { type: 'integer', minimum: 0, maximum: 120000 },
+          assetIndex: { type: ['integer', 'null'], minimum: 0, maximum: 3 },
+          phase: { type: 'string', enum: ['TARGET_PREVIEW', 'TURN_CUE', 'STIMULUS', 'FEEDBACK'] },
+          activeElapsedMs: { type: 'integer', minimum: 0, maximum: 180000 },
+          remainingMs: { type: 'integer', minimum: 0, maximum: 180000 },
           feedback: {
             type: ['string', 'null'],
             enum: ['CORRECT', 'MISS', 'FALSE_POSITIVE', 'WAIT', null],

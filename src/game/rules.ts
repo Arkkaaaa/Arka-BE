@@ -2,7 +2,8 @@ import { isDeepStrictEqual } from 'node:util';
 import { GameMode, Prisma, type PrismaClient } from '../generated/prisma/client.js';
 
 export const GAME_RULE_VERSION = 'mvp-1.4.0';
-const MOTOR_GRIP_RULE_VERSION = 'mvp-1.5.0';
+const MOTOR_GRIP_RULE_VERSION = 'mvp-1.7.0';
+const GO_NO_GO_RULE_VERSION = 'mvp-1.12.0';
 const SEQUENCE_MEMORY_RULE_VERSION = 'mvp-1.7.0';
 const OWNER_PRESENCE_GRACE_MS = 30_000;
 
@@ -15,7 +16,14 @@ export const GAME_RULES = [
       activeMinimumSamples: 20,
       minimumDeltaRaw: 200,
       calibratedPercentile: 0.9,
-      sustainThreshold: 30,
+      fruitTargetsKilograms: {
+        STRAWBERRY: 0.5,
+        TOMATO: 0.75,
+        BANANA: 1,
+        ORANGE: 1.25,
+        APPLE: 1.5,
+        WATERMELON: 2,
+      },
       targetHoldMs: 5_000,
       sessionDurationMs: 30_000,
       telemetryGapMs: 300,
@@ -31,7 +39,7 @@ export const GAME_RULES = [
   },
   {
     mode: GameMode.GO_NO_GO,
-    version: GAME_RULE_VERSION,
+    version: GO_NO_GO_RULE_VERSION,
     config: {
       releaseMinimumSamples: 10,
       pressMinimumSamples: 10,
@@ -39,12 +47,15 @@ export const GAME_RULES = [
       pressPercentile: 0.5,
       pressThresholdFraction: 0.4,
       releaseThresholdFraction: 0.2,
-      totalTrials: 40,
-      targetTrials: 14,
+      assetCatalogVersion: 2,
+      targetPreviewDurationMs: 3_000,
+      initialCueDurationMs: 2_500,
+      scoredDurationMs: 180_000,
       targetPercent: 35,
-      trialDurationMs: 3_000,
-      maxConsecutiveTargets: 3,
-      maxConsecutiveNonTargets: 4,
+      levels: [
+        { level: 1, stimulusDurationMs: 3_000, totalTrials: 5 },
+        { level: 2, stimulusDurationMs: 2_000 },
+      ],
       ownerPresenceGraceMs: OWNER_PRESENCE_GRACE_MS,
       score: { maximum: 1_000, accuracyPercentMultiplier: 10 },
       feedback: { audioIntensity: 'LOW' },

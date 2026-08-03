@@ -2,7 +2,9 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import {
   CreateGameSessionResponseSchema,
+  FruitVariantSchema,
   GameSessionDtoSchema,
+  mapStoredAiSummary,
   PreparationDtoSchema,
   type CreateGameSessionResponse,
   type GameMetrics,
@@ -24,8 +26,8 @@ import {
   writeMode3Association,
 } from '../device/commands.js';
 import {
+  deviceLabelForCapabilities,
   MODE3_DEVICE_ID,
-  MODE3_DEVICE_LABEL,
   readDeviceReadiness,
 } from '../device/readiness.js';
 import type { DeviceButtonCodeSchema } from '../device/protocol.js';
@@ -100,7 +102,7 @@ const MotorRuleSchema = z
     activeMinimumSamples: z.number().int().positive().max(MAX_CALIBRATION_WINDOW_SAMPLES),
     minimumDeltaRaw: z.number().positive(),
     calibratedPercentile: z.number().min(0).max(1),
-    sustainThreshold: z.number().min(0).max(100),
+    fruitTargetsKilograms: z.record(FruitVariantSchema, z.number().positive().max(5)),
     targetHoldMs: z.number().int().positive(),
     sessionDurationMs: z.number().int().positive(),
     telemetryGapMs: z.number().int().positive(),
@@ -115,9 +117,15 @@ const GoNoGoRuleSchema = z
     pressPercentile: z.number().min(0).max(1),
     pressThresholdFraction: z.number().min(0).max(1),
     releaseThresholdFraction: z.number().min(0).max(1),
-    totalTrials: z.literal(40),
-    targetTrials: z.literal(14).optional(),
-    trialDurationMs: z.literal(3_000),
+    assetCatalogVersion: z.literal(2),
+    targetPreviewDurationMs: z.literal(3_000),
+    initialCueDurationMs: z.literal(2_500),
+    scoredDurationMs: z.literal(180_000),
+    targetPercent: z.literal(35),
+    levels: z.tuple([
+      z.object({ level: z.literal(1), stimulusDurationMs: z.literal(3_000), totalTrials: z.literal(5) }),
+      z.object({ level: z.literal(2), stimulusDurationMs: z.literal(2_000) }),
+    ]),
     ownerPresenceGraceMs: z.number().int().positive().optional(),
   })
   .passthrough()
@@ -212,6 +220,7 @@ export interface OpenPreparationInput {
   readonly mode: Mode;
   readonly displayName: string;
   readonly participantReference?: string;
+  readonly fruitVariant?: z.infer<typeof FruitVariantSchema>;
   readonly privacyAcknowledged: boolean;
 }
 export interface CreateRuntimeSessionInput {
@@ -434,7 +443,14 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     if (ruleVersions.length !== 1)
       throw new AppError(409, 'game_rule_unavailable', 'Aturan permainan belum tersedia.');
     const rule = ruleVersions[0]!;
-    const config = parseRule(input.mode, rule.config);
+    const ruleConfig = parseRule(input.mode, rule.config);
+    const config = input.mode === 'MOTOR_GRIP'
+      ? {
+          ...ruleConfig,
+          fruitVariant: FruitVariantSchema.parse(input.fruitVariant),
+          targetKilograms: MotorRuleSchema.parse(ruleConfig).fruitTargetsKilograms[FruitVariantSchema.parse(input.fruitVariant)],
+        }
+      : ruleConfig;
     const activePreparation = await this.dependencies.prisma.trGamePreparation.findFirst({
       where: {
         institutionId: input.institutionId,
@@ -452,6 +468,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       const lock = await readMode3Lock(this.dependencies.redis);
       if (
         runtime &&
+        (input.mode !== 'MOTOR_GRIP' || runtime.config['fruitVariant'] === config['fruitVariant']) &&
         lock?.holderType === 'PREPARATION' &&
         lock.preparationId === activePreparation.preparationId &&
         lock.setupId === activePreparation.setupId
@@ -466,7 +483,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
           expiresAt: activePreparation.expiresAt.toISOString(),
           device: {
             deviceId: MODE3_DEVICE_ID,
-            label: MODE3_DEVICE_LABEL,
+            label: deviceLabelForCapabilities(readiness.capabilities),
             readinessCode: readiness.readinessCode,
           },
           setupBound: runtime.setupBound,
@@ -477,11 +494,23 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       }
     }
     const readiness = await readDeviceReadiness(this.dependencies.redis);
+    const requiredCapability = capabilityFor(input.mode);
     if (
       readiness.readinessCode !== 'READY' ||
-      !readiness.capabilities.includes(capabilityFor(input.mode))
-    )
+      !readiness.capabilities.includes(requiredCapability)
+    ) {
+      this.dependencies.logger.warn(
+        {
+          mode: input.mode,
+          requiredCapability,
+          readinessCode: readiness.readinessCode,
+          firmwareVersion: readiness.firmwareVersion,
+          capabilities: readiness.capabilities,
+        },
+        'Preparation ditolak karena perangkat belum siap',
+      );
       throw new AppError(409, 'device_unavailable', 'Perangkat yang sesuai belum siap.');
+    }
 
     const now = new Date();
     const ttlMs = this.dependencies.env?.PREPARATION_TTL_MS ?? 300_000;
@@ -572,7 +601,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       expiresAt: preparation.expiresAt.toISOString(),
       device: {
         deviceId: MODE3_DEVICE_ID,
-        label: MODE3_DEVICE_LABEL,
+        label: deviceLabelForCapabilities(readiness.capabilities),
         readinessCode: readiness.readinessCode,
       },
       setupBound: false,
@@ -1322,7 +1351,8 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         {
           baselineRaw: Number(runtime.calibration['baselineRaw']),
           calibratedMaxRaw: Number(runtime.calibration['calibratedMaxRaw']),
-          sustainThreshold: rule.sustainThreshold,
+          fruitVariant: FruitVariantSchema.parse(runtime.config['fruitVariant']),
+          targetKilograms: z.number().positive().max(5).parse(runtime.config['targetKilograms']),
           targetHoldMs: rule.targetHoldMs,
           sessionDurationMs: rule.sessionDurationMs,
           telemetryGapMs: rule.telemetryGapMs,
@@ -1332,7 +1362,13 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     } else if (runtime.mode === 'GO_NO_GO') {
       const rule = GoNoGoRuleSchema.parse(runtime.config);
       runtime.engine = createGoNoGo(
-        { totalTrials: rule.totalTrials, trialDurationMs: rule.trialDurationMs, targetPercent: 35 },
+        {
+          targetPreviewDurationMs: rule.targetPreviewDurationMs,
+          initialCueDurationMs: rule.initialCueDurationMs,
+          scoredDurationMs: rule.scoredDurationMs,
+          targetPercent: rule.targetPercent,
+          levels: rule.levels,
+        },
         runtime.seed,
         now,
       );
@@ -1524,7 +1560,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
                 : { calibrationContext: toInputJson(session.calibrationSnapshot) }),
               deviceSnapshot: toInputJson({
                 deviceId: MODE3_DEVICE_ID,
-                label: MODE3_DEVICE_LABEL,
+                label: deviceLabelForCapabilities(session.capabilitySnapshot),
                 firmware: session.firmwareSnapshot,
                 capabilities: session.capabilitySnapshot,
               }),
@@ -2047,21 +2083,11 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       observations: Prisma.JsonValue | null;
     } | null;
   }): GameSessionDto {
-    const aiSummary:
-      | { status: 'READY'; summaryText: string; observations: unknown[] }
-      | { status: 'UNAVAILABLE' }
-      | { status: 'PENDING' } =
-      session.aiSummary?.status === 'READY' && session.aiSummary.summaryText
-        ? {
-            status: 'READY',
-            summaryText: session.aiSummary.summaryText,
-            observations: Array.isArray(session.aiSummary.observations)
-              ? session.aiSummary.observations
-              : [],
-          }
-        : session.aiSummary?.status === 'UNAVAILABLE'
-          ? { status: 'UNAVAILABLE' }
-          : { status: 'PENDING' };
+    const aiSummary = mapStoredAiSummary(
+      session.aiSummary?.status,
+      session.aiSummary?.summaryText,
+      session.aiSummary?.observations,
+    );
     return GameSessionDtoSchema.parse({
       sessionId: session.id,
       status: session.status,

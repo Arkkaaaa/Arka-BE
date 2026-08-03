@@ -1,10 +1,12 @@
+import type { FruitVariant } from '../schemas/common.js';
 import type { EngineCompletion } from './types.js';
 import { assertMonotonic, clamp } from './types.js';
 
 export interface MotorGripConfig {
   baselineRaw: number;
   calibratedMaxRaw: number;
-  sustainThreshold: number;
+  fruitVariant: FruitVariant;
+  targetKilograms: number;
   targetHoldMs: number;
   sessionDurationMs: number;
   telemetryGapMs: number;
@@ -18,9 +20,13 @@ export interface MotorGripSample {
 
 export interface MotorGripMetrics {
   mode: 'MOTOR_GRIP';
+  fruitVariant: FruitVariant;
+  targetKilograms: number;
   peakGripPercent: number;
   peakKilograms: number;
+  averageKilograms: number;
   continuousHoldMs: number;
+  timeAtOrAboveTargetMs: number;
   targetCompleted: boolean;
   sessionElapsedMs: number;
   gripSamples: MotorGripSample[];
@@ -39,6 +45,7 @@ export interface MotorGripState {
   readonly gripSamples: readonly MotorGripSample[];
   readonly currentHoldMs: number;
   readonly longestHoldMs: number;
+  readonly timeAtOrAboveTargetMs: number;
   readonly lastSampleAtMs: number;
   readonly completion: EngineCompletion<MotorGripMetrics> | null;
 }
@@ -53,6 +60,10 @@ export type MotorGripTransition = {
     activeElapsedMs: number;
     remainingMs: number;
     gripSamples: readonly MotorGripSample[];
+    fruitVariant: FruitVariant;
+    targetKilograms: number;
+    averageKilograms: number;
+    timeAtOrAboveTargetMs: number;
     message: string;
   };
   readonly completed: EngineCompletion<MotorGripMetrics> | null;
@@ -68,8 +79,9 @@ function validateConfig(config: MotorGripConfig): Required<MotorGripConfig> {
     throw new RangeError('Calibration maximum must be above baseline');
   }
   if (
-    normalized.sustainThreshold < 0 ||
-    normalized.sustainThreshold > 100 ||
+    !Number.isFinite(normalized.targetKilograms) ||
+    normalized.targetKilograms <= 0 ||
+    normalized.targetKilograms > 5 ||
     !Number.isSafeInteger(normalized.targetHoldMs) ||
     normalized.targetHoldMs <= 0 ||
     !Number.isSafeInteger(normalized.sessionDurationMs) ||
@@ -98,14 +110,17 @@ export function createMotorGrip(config: MotorGripConfig, nowMs: number): MotorGr
     gripSamples: [],
     currentHoldMs: 0,
     longestHoldMs: 0,
+    timeAtOrAboveTargetMs: 0,
     lastSampleAtMs: nowMs,
     completion: null,
   };
 }
 
-export function rawToKilograms(raw: number): number {
-  if (!Number.isInteger(raw) || raw < 0 || raw > 4095) throw new RangeError('Invalid FSR sample');
-  return (raw / 4095) * 5;
+export function rawToKilograms(
+  raw: number,
+  config: Pick<MotorGripConfig, 'baselineRaw' | 'calibratedMaxRaw'>,
+): number {
+  return (normalizeGrip(raw, config) / 100) * 5;
 }
 
 export function normalizeGrip(
@@ -127,6 +142,12 @@ export function normalizeGrip(
   );
 }
 
+function averageKilograms(samples: readonly MotorGripSample[]): number {
+  return samples.length === 0
+    ? 0
+    : samples.reduce((total, sample) => total + sample.kilograms, 0) / samples.length;
+}
+
 function complete(state: MotorGripState): MotorGripState {
   const continuousHoldMs = Math.min(
     state.config.targetHoldMs,
@@ -135,9 +156,13 @@ function complete(state: MotorGripState): MotorGripState {
   const targetCompleted = continuousHoldMs >= state.config.targetHoldMs;
   const metrics: MotorGripMetrics = {
     mode: 'MOTOR_GRIP',
+    fruitVariant: state.config.fruitVariant,
+    targetKilograms: state.config.targetKilograms,
     peakGripPercent: state.peakGripPercent,
     peakKilograms: state.peakKilograms ?? 0,
+    averageKilograms: averageKilograms(state.gripSamples),
     continuousHoldMs,
+    timeAtOrAboveTargetMs: state.timeAtOrAboveTargetMs,
     targetCompleted,
     sessionElapsedMs: state.activeElapsedMs,
     gripSamples: [...state.gripSamples],
@@ -164,11 +189,13 @@ function advance(state: MotorGripState, nowMs: number): MotorGripState {
   const deltaMs = Math.min(nowMs - state.lastNowMs, remainingMs);
   let currentHoldMs = state.currentHoldMs;
   let longestHoldMs = state.longestHoldMs;
+  let timeAtOrAboveTargetMs = state.timeAtOrAboveTargetMs;
   if (nowMs - state.lastSampleAtMs > state.config.telemetryGapMs) {
     currentHoldMs = 0;
-  } else if (state.lastGripPercent >= state.config.sustainThreshold) {
+  } else if (state.lastKilograms >= state.config.targetKilograms) {
     currentHoldMs = Math.min(state.config.targetHoldMs, currentHoldMs + deltaMs);
     longestHoldMs = Math.max(longestHoldMs, currentHoldMs);
+    timeAtOrAboveTargetMs += deltaMs;
   }
   const activeElapsedMs = state.activeElapsedMs + deltaMs;
   const previousSecond = Math.floor(state.activeElapsedMs / 1_000);
@@ -188,6 +215,7 @@ function advance(state: MotorGripState, nowMs: number): MotorGripState {
     activeElapsedMs,
     currentHoldMs,
     longestHoldMs,
+    timeAtOrAboveTargetMs,
     gripSamples,
   };
   if (next.activeElapsedMs >= state.config.sessionDurationMs) next = complete(next);
@@ -214,6 +242,10 @@ function transition(state: MotorGripState): MotorGripTransition {
       activeElapsedMs: state.activeElapsedMs,
       remainingMs: Math.max(0, state.config.sessionDurationMs - state.activeElapsedMs),
       gripSamples: state.gripSamples ?? [],
+      fruitVariant: state.config.fruitVariant,
+      targetKilograms: state.config.targetKilograms,
+      averageKilograms: averageKilograms(state.gripSamples),
+      timeAtOrAboveTargetMs: state.timeAtOrAboveTargetMs,
       message,
     },
     completed: state.completion,
@@ -229,9 +261,9 @@ export function sampleMotorGrip(
   if (next.lifecycle !== 'PLAYING') return transition(next);
 
   const gripPercent = normalizeGrip(raw, next.config);
-  const kilograms = rawToKilograms(raw);
-  const wasAbove = next.lastGripPercent >= next.config.sustainThreshold;
-  const isAbove = gripPercent >= next.config.sustainThreshold;
+  const kilograms = rawToKilograms(raw, next.config);
+  const wasAbove = next.lastKilograms >= next.config.targetKilograms;
+  const isAbove = kilograms >= next.config.targetKilograms;
   let currentHoldMs = next.currentHoldMs;
 
   if (wasAbove && !isAbove) {

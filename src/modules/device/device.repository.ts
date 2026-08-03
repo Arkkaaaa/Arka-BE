@@ -2,7 +2,7 @@ import type { RedisClient } from '../../db/redis.js';
 import { readMode3Lock } from '../../device/commands.js';
 import {
   MODE3_DEVICE_ID,
-  MODE3_DEVICE_LABEL,
+  deviceLabelForCapabilities,
   readDeviceReadiness,
   type DeviceReadiness,
 } from '../../device/readiness.js';
@@ -33,7 +33,7 @@ export class DeviceRepository {
       {
         device: {
           deviceId: MODE3_DEVICE_ID,
-          label: MODE3_DEVICE_LABEL,
+          label: deviceLabelForCapabilities(readiness.capabilities),
           inventoryStatus: 'ACTIVE',
           firmwareVersion: readiness.firmwareVersion,
           capabilitySnapshot: readiness.capabilities,

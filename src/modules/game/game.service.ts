@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
   GameSessionDtoSchema,
+  mapStoredAiSummary,
   type CreateGameSessionResponse,
   type GameSessionDto,
   type PreparationDto,
@@ -34,18 +35,11 @@ function auditContext(context: GameRequestContext): AuditContext {
 }
 
 export function mapGameSession(session: PersistedGameSession): GameSessionDto {
-  const aiSummary =
-    session.aiSummary?.status === 'READY' && session.aiSummary.summaryText
-      ? {
-          status: 'READY' as const,
-          summaryText: session.aiSummary.summaryText,
-          observations: Array.isArray(session.aiSummary.observations)
-            ? session.aiSummary.observations
-            : [],
-        }
-      : session.aiSummary?.status === 'UNAVAILABLE'
-        ? { status: 'UNAVAILABLE' as const }
-        : { status: 'PENDING' as const };
+  const aiSummary = mapStoredAiSummary(
+    session.aiSummary?.status,
+    session.aiSummary?.summaryText,
+    session.aiSummary?.observations,
+  );
 
   return GameSessionDtoSchema.parse({
     sessionId: session.id,
@@ -100,6 +94,7 @@ export class GameService {
       ...(request.participantReference === undefined
         ? {}
         : { participantReference: request.participantReference }),
+      ...(request.mode === 'MOTOR_GRIP' ? { fruitVariant: request.fruitVariant! } : {}),
     });
     await this.writeAudit(auditContext(context), {
       action: 'PREPARATION_OPENED',

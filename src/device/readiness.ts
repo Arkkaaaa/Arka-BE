@@ -3,10 +3,18 @@ import { z } from 'zod';
 
 const SUPPORTED_DEVICE_FIRMWARE: Readonly<Record<string, true>> = {
   '0.2.0': true,
+  '0.2.1': true,
 };
 
 export const MODE3_DEVICE_ID = 'mode3-primary';
 export const MODE3_DEVICE_LABEL = 'Arka Ding Dong Dong';
+export const FSR_DEVICE_LABEL = 'Arka Genggam';
+
+export function deviceLabelForCapabilities(capabilities: unknown): string {
+  return Array.isArray(capabilities) && capabilities.includes('FSR_10HZ')
+    ? FSR_DEVICE_LABEL
+    : MODE3_DEVICE_LABEL;
+}
 export const MODE3_READINESS_KEY = 'arka:{mode3}:readiness';
 
 export function isDeviceFirmwareCompatible(firmwareVersion: string): boolean {

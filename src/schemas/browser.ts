@@ -5,6 +5,7 @@ import {
   DeviceReadinessCodeSchema,
   DateOnlySchema,
   DisplayNameSchema,
+  FruitVariantSchema,
   GameModeSchema,
   IsoDateSchema,
   ParticipantGenderSchema,
@@ -274,10 +275,15 @@ export const CreatePreparationRequestSchema = z
     displayName: DisplayNameSchema,
     participantReference: ParticipantReferenceSchema.optional(),
     privacyAcknowledged: z.boolean(),
+    fruitVariant: FruitVariantSchema.optional(),
   })
   .refine((value) => value.mode === 'SEQUENCE_MEMORY' || value.participantReference !== undefined, {
     path: ['participantReference'],
     message: 'Kode peserta fasilitas wajib untuk mode ini.',
+  })
+  .refine((value) => value.mode === 'MOTOR_GRIP' ? value.fruitVariant !== undefined : value.fruitVariant === undefined, {
+    path: ['fruitVariant'],
+    message: 'Buah hanya wajib untuk mode genggaman.',
   });
 export const PreparationStateSchema = z.enum([
   'WAITING_DEVICE',
@@ -327,12 +333,27 @@ export const MotorGripSampleSchema = z.object({
 });
 export const MotorGripMetricsSchema = z.object({
   mode: z.literal('MOTOR_GRIP'),
+  fruitVariant: FruitVariantSchema.optional().default('ORANGE'),
+  targetKilograms: z.number().positive().max(5).optional().default(1.25),
   peakGripPercent: z.number().min(0).max(100),
   peakKilograms: z.number().min(0).max(5).optional().default(0),
+  averageKilograms: z.number().min(0).max(5).optional().default(0),
   continuousHoldMs: z.number().int().min(0).max(5000),
+  timeAtOrAboveTargetMs: z.number().int().min(0).max(30000).optional().default(0),
   targetCompleted: z.boolean(),
   sessionElapsedMs: z.number().int().min(0).max(30000),
   gripSamples: z.array(MotorGripSampleSchema).max(30).optional().default([]),
+});
+export const GoNoGoLevelMetricsSchema = z.object({
+  level: z.number().int().min(1).max(2),
+  stimulusDurationMs: z.number().int().positive(),
+  totalTrials: z.number().int().nonnegative(),
+  hits: z.number().int().nonnegative(),
+  misses: z.number().int().nonnegative(),
+  falsePositives: z.number().int().nonnegative(),
+  correctRejections: z.number().int().nonnegative(),
+  accuracyPercent: z.number().min(0).max(100),
+  meanHitReactionMs: z.number().nonnegative().nullable(),
 });
 export const GoNoGoMetricsSchema = z.object({
   mode: z.literal('GO_NO_GO'),
@@ -345,6 +366,7 @@ export const GoNoGoMetricsSchema = z.object({
   correctRejections: z.number().int().nonnegative(),
   accuracyPercent: z.number().min(0).max(100),
   meanHitReactionMs: z.number().nonnegative().nullable(),
+  levelBreakdown: z.array(GoNoGoLevelMetricsSchema).max(2).optional().default([]),
 });
 export const SequenceMemoryMetricsSchema = z.object({
   mode: z.literal('SEQUENCE_MEMORY'),
@@ -366,15 +388,41 @@ export const GameMetricsSchema = z.discriminatedUnion('mode', [
   SequenceMemoryMetricsSchema,
 ]);
 export type GameMetrics = z.infer<typeof GameMetricsSchema>;
+export const AiAudienceSummarySchema = z.object({
+  summaryText: z.string().max(280),
+  observations: z.array(z.string().max(140)).max(3),
+});
 export const AiSummaryDtoSchema = z.discriminatedUnion('status', [
   z.object({ status: z.literal('PENDING') }),
   z.object({ status: z.literal('UNAVAILABLE') }),
   z.object({
     status: z.literal('READY'),
-    summaryText: z.string().max(280),
-    observations: z.array(z.string().max(140)).max(3),
+    participant: AiAudienceSummarySchema,
+    clinician: AiAudienceSummarySchema,
   }),
 ]);
+export type AiSummaryDto = z.infer<typeof AiSummaryDtoSchema>;
+
+const StoredDualAiSummarySchema = z.object({
+  participant: AiAudienceSummarySchema,
+  clinician: AiAudienceSummarySchema,
+});
+
+export function mapStoredAiSummary(
+  status: string | undefined,
+  summaryText: string | null | undefined,
+  observations: unknown,
+): AiSummaryDto {
+  if (status === 'READY' && summaryText) {
+    if (Array.isArray(observations)) {
+      const legacy = AiAudienceSummarySchema.parse({ summaryText, observations });
+      return { status: 'READY', participant: legacy, clinician: legacy };
+    }
+
+    return { status: 'READY', ...StoredDualAiSummarySchema.parse(observations) };
+  }
+  return status === 'UNAVAILABLE' ? { status: 'UNAVAILABLE' } : { status: 'PENDING' };
+}
 export const GameResultDtoSchema = z.object({
   score: z.number().int().min(0).max(1000),
   metrics: GameMetricsSchema,
