@@ -1,13 +1,16 @@
+import { randomUUID } from 'node:crypto';
 import { betterAuth, getCurrentAdapter, type BetterAuthPlugin } from 'better-auth';
+import { generateRandomString } from 'better-auth/crypto';
 import { prismaAdapter } from 'better-auth/adapters/prisma';
 import { APIError, createAuthMiddleware } from 'better-auth/api';
-import { openAPI } from 'better-auth/plugins';
+import { emailOTP, openAPI } from 'better-auth/plugins';
 import type { Env } from '../config/env.js';
 import type { PrismaClient } from '../generated/prisma/client.js';
 import {
   InstitutionNameError,
   validateRegistrationInstitutionName,
 } from './institution-provisioning.js';
+import { createVerificationEmailSender } from './verification-email.js';
 
 export interface AuthSession {
   session: { id: string; expiresAt: Date };
@@ -46,13 +49,28 @@ const institutionSchemaPlugin = {
 } satisfies BetterAuthPlugin;
 
 export function createAuth(prisma: PrismaClient, env: Env): Auth {
+  const verificationEmail = createVerificationEmailSender(env);
   return betterAuth({
     appName: 'Arka',
     baseURL: env.BETTER_AUTH_URL,
     secret: env.BETTER_AUTH_SECRET,
     trustedOrigins: [...env.browserOrigins],
     database: prismaAdapter(prisma, { provider: 'postgresql', transaction: true }),
-    plugins: [institutionSchemaPlugin, openAPI({ disableDefaultReference: true })],
+    plugins: [
+      institutionSchemaPlugin,
+      emailOTP({
+        expiresIn: 300,
+        otpLength: 6,
+        allowedAttempts: 5,
+        storeOTP: 'hashed',
+        overrideDefaultEmailVerification: true,
+        async sendVerificationOTP({ email, otp, type }) {
+          if (type !== 'email-verification') return;
+          await verificationEmail.sendVerificationCode(email, otp);
+        },
+      }),
+      openAPI({ disableDefaultReference: true }),
+    ],
     hooks: {
       before: createAuthMiddleware((context) => {
         if (context.path !== '/sign-up/email') return Promise.resolve();
@@ -79,7 +97,7 @@ export function createAuth(prisma: PrismaClient, env: Env): Auth {
     emailAndPassword: {
       enabled: true,
       disableSignUp: false,
-      requireEmailVerification: false,
+      requireEmailVerification: true,
       minPasswordLength: 8,
       maxPasswordLength: 128,
       autoSignIn: false,
@@ -153,6 +171,12 @@ export function createAuth(prisma: PrismaClient, env: Env): Auth {
       modelName: 'trVerification',
     },
     advanced: {
+      database: {
+        generateId: ({ model }) =>
+          model === 'institution'
+            ? randomUUID()
+            : generateRandomString(32, 'a-z', 'A-Z', '0-9'),
+      },
       useSecureCookies: env.NODE_ENV === 'production',
       defaultCookieAttributes: {
         httpOnly: true,
