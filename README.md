@@ -71,8 +71,6 @@ Buat `.env` dari `.env.example` dan ganti semua nilai contoh.
 | `OLLAMA_API_KEY` | API key untuk provider `openai`; kosong untuk Ollama lokal |
 | `OLLAMA_MODEL` | Model yang diizinkan |
 | `OLLAMA_MODEL_ALLOWLIST` | Daftar model yang diizinkan |
-| `OPERATIONS_ALERT_WEBHOOK_URL` | Endpoint alert outbox |
-| `OPERATIONS_ALERT_WEBHOOK_TOKEN` | Token alert minimal 32 karakter |
 
 Nilai timer, lease, retry, dan worker lainnya tersedia lengkap di `.env.example`. Production startup harus memakai HTTPS, secret manager, private database/Redis/Ollama, serta provider yang telah dikonfigurasi.
 

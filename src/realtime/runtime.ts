@@ -1656,18 +1656,6 @@ export class AuthoritativeRuntime implements RuntimeGateway {
           metadata: { failureCode },
         },
       );
-      await tx.trOutboxEvent.create({
-        data: {
-          eventKey: `session-finalization-failed:${sessionId}`,
-          type: 'SESSION_FINALIZATION_FAILED',
-          payload: {
-            institutionId: session.institutionId,
-            sessionId,
-            failureCode,
-            failedAt: now.toISOString(),
-          },
-        },
-      });
       return true;
     });
   }

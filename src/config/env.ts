@@ -63,28 +63,6 @@ function deviceSecretSchema(name: string) {
   );
 }
 
-const alertWebhookUrlSchema = z
-  .string()
-  .url()
-  .transform((value, ctx) => {
-    const url = new URL(value);
-    if (
-      !['http:', 'https:'].includes(url.protocol) ||
-      url.username ||
-      url.password ||
-      url.search ||
-      url.hash
-    ) {
-      ctx.addIssue({
-        code: 'custom',
-        message:
-          'OPERATIONS_ALERT_WEBHOOK_URL must be an HTTP(S) URL without credentials, query, or fragment',
-      });
-      return z.NEVER;
-    }
-    return url.toString();
-  });
-
 const rawEnvSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   HOST: z.string().min(1).default('0.0.0.0'),
@@ -124,12 +102,6 @@ const rawEnvSchema = z.object({
   OLLAMA_WORKER_INTERVAL_MS: positiveInt.max(MAX_TIMER_MS).default(5_000),
   OLLAMA_LEASE_MS: positiveInt.max(MAX_TIMER_MS).default(30_000),
   OLLAMA_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
-  OPERATIONS_ALERT_WEBHOOK_URL: alertWebhookUrlSchema,
-  OPERATIONS_ALERT_WEBHOOK_TOKEN: z.string().min(32),
-  OUTBOX_REQUEST_TIMEOUT_MS: positiveInt.max(MAX_TIMER_MS).default(8_000),
-  OUTBOX_WORKER_INTERVAL_MS: positiveInt.max(MAX_TIMER_MS).default(5_000),
-  OUTBOX_LEASE_MS: positiveInt.max(MAX_TIMER_MS).default(30_000),
-  OUTBOX_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(20).default(10),
 });
 
 export type Env = Omit<
@@ -196,15 +168,6 @@ export function parseEnv(source: NodeJS.ProcessEnv): Env {
           clientSecret: parsed.GOOGLE_CLIENT_SECRET,
         })
       : null;
-  if (
-    parsed.NODE_ENV === 'production' &&
-    new URL(parsed.OPERATIONS_ALERT_WEBHOOK_URL).protocol !== 'https:'
-  ) {
-    throw new Error('OPERATIONS_ALERT_WEBHOOK_URL must use HTTPS in production');
-  }
-  if (parsed.OUTBOX_LEASE_MS <= parsed.OUTBOX_REQUEST_TIMEOUT_MS) {
-    throw new Error('OUTBOX_LEASE_MS must exceed OUTBOX_REQUEST_TIMEOUT_MS');
-  }
   const rest = { ...parsed };
   Reflect.deleteProperty(rest, 'BROWSER_ORIGINS');
   Reflect.deleteProperty(rest, 'OLLAMA_MODEL_ALLOWLIST');

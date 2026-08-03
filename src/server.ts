@@ -27,7 +27,6 @@ import { createApiRouter } from './routes/api.js';
 import { createSwaggerRouter } from './routes/swagger.js';
 import { ensureAllInstitutionGameRules } from './game/rules.js';
 import { createAiSummaryWorker } from './workers/ai-summary.js';
-import { createOutboxWorker } from './workers/outbox.js';
 
 const logger = createLogger(env);
 const prisma = getPrisma(env);
@@ -44,7 +43,6 @@ const realtime = createRealtimeAttachment({
   validateSession,
 });
 const aiSummaryWorker = createAiSummaryWorker({ prisma, env, logger });
-const outboxWorker = createOutboxWorker({ prisma, env, logger });
 const app = express();
 const server = createServer(app);
 const authHandler = toNodeHandler(auth);
@@ -139,7 +137,6 @@ async function shutdown(signal: string): Promise<void> {
     serverClosed,
     realtime.close(),
     aiSummaryWorker.stop(),
-    outboxWorker.stop(),
   ]);
   await Promise.allSettled([redis.quit(), prisma.$disconnect()]);
   logger.info('Backend shutdown completed');
@@ -152,7 +149,6 @@ async function start(): Promise<void> {
   await realtime.recover();
   sessionActivity.start();
   aiSummaryWorker.start();
-  outboxWorker.start();
 
   const { promise: listening, resolve, reject } = Promise.withResolvers<void>();
   server.once('error', reject);
