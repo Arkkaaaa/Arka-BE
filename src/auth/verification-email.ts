@@ -14,6 +14,9 @@ export function createVerificationEmailSender(env: Env): VerificationEmailSender
       user: env.SMTP_USER,
       pass: env.SMTP_PASSWORD,
     },
+    connectionTimeout: env.SMTP_CONNECTION_TIMEOUT_MS,
+    greetingTimeout: env.SMTP_GREETING_TIMEOUT_MS,
+    socketTimeout: env.SMTP_SOCKET_TIMEOUT_MS,
   });
 
   return {

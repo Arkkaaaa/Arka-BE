@@ -63,7 +63,6 @@ export function createAuth(prisma: PrismaClient, env: Env): Auth {
         otpLength: 6,
         allowedAttempts: 5,
         storeOTP: 'hashed',
-        overrideDefaultEmailVerification: true,
         async sendVerificationOTP({ email, otp, type }) {
           if (type !== 'email-verification') return;
           await verificationEmail.sendVerificationCode(email, otp);
