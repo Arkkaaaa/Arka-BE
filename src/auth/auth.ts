@@ -177,6 +177,9 @@ export function createAuth(prisma: PrismaClient, env: Env): Auth {
             ? randomUUID()
             : generateRandomString(32, 'a-z', 'A-Z', '0-9'),
       },
+      ipAddress: {
+        ipAddressHeaders: ['x-real-ip'],
+      },
       useSecureCookies: env.NODE_ENV === 'production',
       defaultCookieAttributes: {
         httpOnly: true,
