@@ -5,6 +5,7 @@ const SUPPORTED_DEVICE_FIRMWARE: Readonly<Record<string, true>> = {
   '0.2.0': true,
   '0.2.1': true,
   '0.2.2': true,
+  '0.2.3': true,
 };
 
 export const MODE3_DEVICE_ID = 'mode3-primary';

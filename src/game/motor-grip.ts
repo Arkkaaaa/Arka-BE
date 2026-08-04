@@ -6,6 +6,7 @@ export interface MotorGripConfig {
   baselineRaw: number;
   calibratedMaxRaw: number;
   fruitVariant: FruitVariant;
+  fullScaleKilograms: number;
   targetKilograms: number;
   targetHoldMs: number;
   sessionDurationMs: number;
@@ -79,9 +80,12 @@ function validateConfig(config: MotorGripConfig): Required<MotorGripConfig> {
     throw new RangeError('Calibration maximum must be above baseline');
   }
   if (
+    !Number.isFinite(normalized.fullScaleKilograms) ||
+    normalized.fullScaleKilograms <= 0 ||
+    normalized.fullScaleKilograms > 120 ||
     !Number.isFinite(normalized.targetKilograms) ||
     normalized.targetKilograms <= 0 ||
-    normalized.targetKilograms > 5 ||
+    normalized.targetKilograms > normalized.fullScaleKilograms ||
     !Number.isSafeInteger(normalized.targetHoldMs) ||
     normalized.targetHoldMs <= 0 ||
     !Number.isSafeInteger(normalized.sessionDurationMs) ||
@@ -118,9 +122,9 @@ export function createMotorGrip(config: MotorGripConfig, nowMs: number): MotorGr
 
 export function rawToKilograms(
   raw: number,
-  config: Pick<MotorGripConfig, 'baselineRaw' | 'calibratedMaxRaw'>,
+  config: Pick<MotorGripConfig, 'baselineRaw' | 'calibratedMaxRaw' | 'fullScaleKilograms'>,
 ): number {
-  return (normalizeGrip(raw, config) / 100) * 5;
+  return (normalizeGrip(raw, config) / 100) * config.fullScaleKilograms;
 }
 
 export function normalizeGrip(

@@ -388,6 +388,21 @@ export const arkaOpenApi = {
         },
       },
     },
+    '/api/v1/game-preparations/{preparationId}/status': {
+      patch: {
+        tags: ['Games'],
+        summary: 'Cancel a game preparation',
+        operationId: 'commandGamePreparation',
+        security,
+        parameters: [parameterRef('PreparationId'), parameterRef('CsrfToken')],
+        requestBody: body(ref('PreparationStatusPatchRequest'), { command: 'CANCEL' }),
+        responses: {
+          '204': { description: 'Preparation cancelled.' },
+          ...institutionErrors,
+          '404': responseRef('NotFound'),
+        },
+      },
+    },
     '/api/v1/game-sessions': {
       post: {
         tags: ['Games'],
@@ -476,6 +491,12 @@ export const arkaOpenApi = {
         description: 'Opaque public participant handle.',
         schema: ref('PublicId'),
         example: publicParticipantId,
+      },
+      PreparationId: {
+        name: 'preparationId',
+        in: 'path',
+        required: true,
+        schema: ref('PublicId'),
       },
       SessionId: {
         name: 'sessionId',
@@ -1030,6 +1051,7 @@ export const arkaOpenApi = {
           setupId: { type: 'string', format: 'uuid' },
           mode: ref('GameMode'),
           displayName: ref('DisplayName'),
+          fruitVariant: ref('FruitVariant'),
           state: ref('PreparationState'),
           expiresAt: ref('IsoDate'),
           device: {
@@ -1061,6 +1083,11 @@ export const arkaOpenApi = {
           canStart: { type: 'boolean' },
         },
       },
+      PreparationStatusPatchRequest: {
+        type: 'object',
+        required: ['command'],
+        properties: { command: { type: 'string', const: 'CANCEL' } },
+      },
       CreateGameSessionRequest: {
         type: 'object',
         required: ['preparationId'],
@@ -1086,7 +1113,7 @@ export const arkaOpenApi = {
         properties: {
           elapsedSecond: { type: 'integer', minimum: 1, maximum: 30 },
           gripPercent: { type: 'number', minimum: 0, maximum: 100 },
-          kilograms: { type: 'number', minimum: 0, maximum: 5 },
+          kilograms: { type: 'number', minimum: 0, maximum: 120 },
         },
       },
       MotorGripMetrics: {
@@ -1095,7 +1122,7 @@ export const arkaOpenApi = {
         properties: {
           mode: { type: 'string', const: 'MOTOR_GRIP' },
           peakGripPercent: { type: 'number', minimum: 0, maximum: 100 },
-          peakKilograms: { type: 'number', minimum: 0, maximum: 5 },
+          peakKilograms: { type: 'number', minimum: 0, maximum: 120 },
           continuousHoldMs: { type: 'integer', minimum: 0, maximum: 5000 },
           targetCompleted: { type: 'boolean' },
           sessionElapsedMs: { type: 'integer', minimum: 0, maximum: 30000 },
@@ -1403,7 +1430,7 @@ export const arkaOpenApi = {
         properties: {
           mode: { type: 'string', const: 'MOTOR_GRIP' },
           gripPercent: { type: 'number', minimum: 0, maximum: 100 },
-          kilograms: { type: 'number', minimum: 0, maximum: 5 },
+          kilograms: { type: 'number', minimum: 0, maximum: 120 },
           holdProgressMs: { type: 'integer', minimum: 0, maximum: 5000 },
           activeElapsedMs: { type: 'integer', minimum: 0, maximum: 30000 },
           remainingMs: { type: 'integer', minimum: 0, maximum: 30000 },
@@ -1563,7 +1590,7 @@ export const arkaOpenApi = {
                     maxItems: 16,
                     items: {
                       type: 'string',
-                      enum: ['FSR_10HZ', 'BUTTONS_4', 'LED', 'HAPTIC'],
+                      enum: ['FSR_10HZ', 'FSR_TARED_ON_SETUP_BIND', 'BUTTONS_4', 'LED', 'HAPTIC'],
                     },
                   },
                 },

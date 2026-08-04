@@ -15,6 +15,7 @@ import type { GameRepository, PersistedGameSession } from './game.repository.js'
 import type {
   CreateGameSessionRequest,
   CreatePreparationRequest,
+  PreparationStatusPatchRequest,
   SessionStatusPatchRequest,
 } from './game.validation.js';
 
@@ -102,7 +103,6 @@ export class GameService {
       ...(request.participantReference === undefined
         ? {}
         : { participantReference: request.participantReference }),
-      ...(request.mode === 'MOTOR_GRIP' ? { fruitVariant: request.fruitVariant! } : {}),
     });
     await this.writeAudit(auditContext(context), {
       action: 'PREPARATION_OPENED',
@@ -111,6 +111,25 @@ export class GameService {
       metadata: { mode: preparation.mode },
     });
     return preparation;
+  }
+
+  async commandPreparation(
+    context: GameRequestContext,
+    preparationId: string,
+    request: PreparationStatusPatchRequest,
+  ): Promise<void> {
+    if (request.command === 'CANCEL') {
+      await this.runtime.cancelPreparation({
+        institutionId: context.institutionId,
+        ownerSessionId: context.ownerSessionId,
+        preparationId,
+      });
+    }
+    await this.writeAudit(auditContext(context), {
+      action: `PREPARATION_${request.command}`,
+      targetType: 'GamePreparation',
+      targetId: preparationId,
+    });
   }
 
   async createSession(

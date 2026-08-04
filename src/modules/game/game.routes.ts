@@ -5,6 +5,8 @@ import type { GameController } from './game.controller.js';
 import {
   CreateGameSessionRequestSchema,
   CreatePreparationRequestSchema,
+  PreparationParamsSchema,
+  PreparationStatusPatchRequestSchema,
   SessionParamsSchema,
   SessionStatusPatchRequestSchema,
 } from './game.validation.js';
@@ -15,6 +17,12 @@ export function createGameRoutes(controller: GameController): Router {
     '/game-preparations',
     validateBody(CreatePreparationRequestSchema),
     asyncHandler(controller.openPreparation),
+  );
+  router.patch(
+    '/game-preparations/:preparationId/status',
+    validateParams(PreparationParamsSchema),
+    validateBody(PreparationStatusPatchRequestSchema),
+    asyncHandler(controller.commandPreparation),
   );
   router.post(
     '/game-sessions',

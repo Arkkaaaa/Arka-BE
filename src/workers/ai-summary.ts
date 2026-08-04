@@ -330,6 +330,18 @@ export class AiSummaryWorker {
       });
     } catch (error) {
       if (this.#stopping || error instanceof LeaseLostError) return;
+      this.dependencies.logger.warn(
+        {
+          summaryId: summary.id,
+          attemptCount: summary.attemptCount,
+          provider: this.dependencies.env.OLLAMA_PROVIDER,
+          model: this.dependencies.env.OLLAMA_MODEL,
+          timeoutMs: this.dependencies.env.OLLAMA_TIMEOUT_MS,
+          errorName: error instanceof Error ? error.name : 'UnknownError',
+          timedOut: error instanceof Error && error.name === 'AbortError',
+        },
+        'Pembuatan ringkasan AI gagal',
+      );
       await this.completeFailure(
         summary,
         error instanceof SyntaxError || error instanceof z.ZodError

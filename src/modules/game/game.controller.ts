@@ -10,6 +10,7 @@ import {
   parseIdempotencyKey,
   type CreateGameSessionRequest,
   type CreatePreparationRequest,
+  type PreparationStatusPatchRequest,
   type SessionStatusPatchRequest,
 } from './game.validation.js';
 
@@ -27,6 +28,9 @@ function gameRequestContext(req: Request): GameRequestContext {
     requestId: req.requestId,
   };
 }
+function preparationId(req: Request): string {
+  return req.params['preparationId'] as string;
+}
 function sessionId(req: Request): string {
   return req.params['sessionId'] as string;
 }
@@ -40,6 +44,15 @@ export class GameController {
       req.body as CreatePreparationRequest,
     );
     res.status(201).json(PreparationDtoSchema.parse(preparation));
+  };
+
+  readonly commandPreparation: RequestHandler = async (req, res) => {
+    await this.service.commandPreparation(
+      gameRequestContext(req),
+      preparationId(req),
+      req.body as PreparationStatusPatchRequest,
+    );
+    res.status(204).send();
   };
 
   readonly createSession: RequestHandler = async (req, res) => {

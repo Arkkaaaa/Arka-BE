@@ -2,8 +2,8 @@ import { isDeepStrictEqual } from 'node:util';
 import { GameMode, Prisma, type PrismaClient } from '../generated/prisma/client.js';
 
 export const GAME_RULE_VERSION = 'mvp-1.4.0';
-const MOTOR_GRIP_RULE_VERSION = 'mvp-1.8.0';
-const GO_NO_GO_RULE_VERSION = 'mvp-1.12.0';
+const MOTOR_GRIP_RULE_VERSION = 'mvp-1.9.0';
+const GO_NO_GO_RULE_VERSION = 'mvp-1.13.0';
 const SEQUENCE_MEMORY_RULE_VERSION = 'mvp-1.7.0';
 const OWNER_PRESENCE_GRACE_MS = 30_000;
 
@@ -12,17 +12,17 @@ export const GAME_RULES = [
     mode: GameMode.MOTOR_GRIP,
     version: MOTOR_GRIP_RULE_VERSION,
     config: {
-      baselineMinimumSamples: 10,
-      activeMinimumSamples: 15,
-      minimumDeltaRaw: 200,
-      calibratedPercentile: 0.9,
+      calibrationPressMinimumRaw: 80,
+      baselineRaw: 0,
+      calibratedMaxRaw: 4095,
+      fullScaleKilograms: 120,
       fruitTargetsKilograms: {
-        STRAWBERRY: 0.5,
-        TOMATO: 0.75,
-        BANANA: 1,
-        ORANGE: 1.25,
-        APPLE: 1.5,
-        WATERMELON: 2,
+        STRAWBERRY: 3,
+        TOMATO: 5,
+        BANANA: 8,
+        ORANGE: 11,
+        APPLE: 15,
+        WATERMELON: 20,
       },
       targetHoldMs: 5_000,
       sessionDurationMs: 30_000,
@@ -41,12 +41,9 @@ export const GAME_RULES = [
     mode: GameMode.GO_NO_GO,
     version: GO_NO_GO_RULE_VERSION,
     config: {
-      releaseMinimumSamples: 10,
-      pressMinimumSamples: 10,
-      minimumDeltaRaw: 200,
-      pressPercentile: 0.5,
-      pressThresholdFraction: 0.4,
-      releaseThresholdFraction: 0.2,
+      calibrationPressMinimumRaw: 40,
+      pressThresholdRaw: 40,
+      releaseThresholdRaw: 15,
       assetCatalogVersion: 2,
       targetPreviewDurationMs: 3_000,
       initialCueDurationMs: 2_500,

@@ -37,10 +37,7 @@ import {
 } from '../device/readiness.js';
 import type { DeviceButtonCodeSchema } from '../device/protocol.js';
 import {
-  calibrateGoNoGo,
-  calibrateMotorGrip,
   classifyFsrEdge,
-  createGoNoGoPracticePlan,
   type FsrEdgeState,
   type PracticeTrial,
 } from '../game/setup.js';
@@ -75,7 +72,6 @@ import { RealtimeEventStore } from './events.js';
 const COUNTDOWN_MS = 3_000;
 const RUNTIME_TTL_SECONDS = 3_600;
 const PREPARATION_EXPIRY_SWEEP_MS = 1_000;
-const MAX_CALIBRATION_WINDOW_SAMPLES = 256;
 const FSR_RAW_MIN = 0;
 const FSR_RAW_MAX = 4_095;
 const COMPANION_PRESENCE_TTL_SECONDS = 20;
@@ -103,11 +99,11 @@ return redis.call('ZCARD', KEYS[1])
 
 const MotorRuleSchema = z
   .object({
-    baselineMinimumSamples: z.number().int().positive().max(MAX_CALIBRATION_WINDOW_SAMPLES),
-    activeMinimumSamples: z.number().int().positive().max(MAX_CALIBRATION_WINDOW_SAMPLES),
-    minimumDeltaRaw: z.number().positive(),
-    calibratedPercentile: z.number().min(0).max(1),
-    fruitTargetsKilograms: z.record(FruitVariantSchema, z.number().positive().max(5)),
+    calibrationPressMinimumRaw: z.number().int().min(1).max(4095),
+    baselineRaw: z.literal(0),
+    calibratedMaxRaw: z.literal(4095),
+    fullScaleKilograms: z.number().positive().max(120),
+    fruitTargetsKilograms: z.record(FruitVariantSchema, z.number().positive().max(120)),
     targetHoldMs: z.number().int().positive(),
     sessionDurationMs: z.number().int().positive(),
     telemetryGapMs: z.number().int().positive(),
@@ -116,12 +112,9 @@ const MotorRuleSchema = z
   .passthrough();
 const GoNoGoRuleSchema = z
   .object({
-    releaseMinimumSamples: z.number().int().positive().max(MAX_CALIBRATION_WINDOW_SAMPLES),
-    pressMinimumSamples: z.number().int().positive().max(MAX_CALIBRATION_WINDOW_SAMPLES),
-    minimumDeltaRaw: z.number().positive(),
-    pressPercentile: z.number().min(0).max(1),
-    pressThresholdFraction: z.number().min(0).max(1),
-    releaseThresholdFraction: z.number().min(0).max(1),
+    calibrationPressMinimumRaw: z.number().int().min(1).max(4095),
+    pressThresholdRaw: z.number().int().min(1).max(4095),
+    releaseThresholdRaw: z.number().int().min(0).max(4094),
     assetCatalogVersion: z.literal(2),
     targetPreviewDurationMs: z.literal(3_000),
     initialCueDurationMs: z.literal(2_500),
@@ -134,7 +127,8 @@ const GoNoGoRuleSchema = z
     ownerPresenceGraceMs: z.number().int().positive().optional(),
   })
   .passthrough()
-  .refine((value) => value.releaseThresholdFraction < value.pressThresholdFraction);
+  .refine((value) => value.releaseThresholdRaw < value.pressThresholdRaw)
+  .refine((value) => value.calibrationPressMinimumRaw >= value.pressThresholdRaw);
 const SequenceRuleSchema = z
   .object({
     initialSequenceLength: z.number().int().min(1),
@@ -226,8 +220,12 @@ export interface OpenPreparationInput {
   readonly mode: Mode;
   readonly displayName: string;
   readonly participantReference?: string;
-  readonly fruitVariant?: z.infer<typeof FruitVariantSchema>;
   readonly privacyAcknowledged: boolean;
+}
+export interface CancelRuntimePreparationInput {
+  readonly institutionId: string;
+  readonly ownerSessionId: string;
+  readonly preparationId: string;
 }
 export interface CreateRuntimeSessionInput {
   readonly institutionId: string;
@@ -249,6 +247,7 @@ export interface CommandRuntimeSessionInput {
 
 export interface RuntimeGateway {
   openPreparation(input: OpenPreparationInput): Promise<PreparationDto>;
+  cancelPreparation(input: CancelRuntimePreparationInput): Promise<void>;
   createSession(input: CreateRuntimeSessionInput): Promise<CreateGameSessionResponse>;
   commandSession(input: CommandRuntimeSessionInput): Promise<GameSessionDto>;
 }
@@ -310,29 +309,10 @@ function finalizationFailureCode(error: unknown): string {
   }
   return 'FINALIZATION_PERSISTENCE_ERROR';
 }
-function createCalibrationState(): CalibrationWindowState {
-  return { baselineWindow: [], activeWindow: [], activeCursor: 0 };
+function isPermanentPrismaSchemaError(error: unknown): boolean {
+  const code = finalizationFailureCode(error);
+  return code === 'P2021' || code === 'P2022';
 }
-
-function appendCalibrationSample(
-  state: CalibrationWindowState,
-  raw: number,
-  baselineLimit: number,
-  activeLimit: number,
-): void {
-  if (state.baselineWindow.length < baselineLimit) {
-    state.baselineWindow.push(raw);
-    return;
-  }
-  if (state.activeWindow.length < activeLimit) {
-    state.activeWindow.push(raw);
-    return;
-  }
-  const cursor = state.activeCursor ?? 0;
-  state.activeWindow[cursor] = raw;
-  state.activeCursor = (cursor + 1) % activeLimit;
-}
-
 function pauseEngine(engine: EngineState, nowMs: number): EngineState {
   if (engine.mode === 'MOTOR_GRIP') return pauseMotorGrip(engine, nowMs).state;
   if (engine.mode === 'GO_NO_GO') return pauseGoNoGo(engine, nowMs).state;
@@ -410,7 +390,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       }
       const stored = await this.loadPreparation(preparation.setupId);
       if (stored) this.#activeSetups.add(preparation.setupId);
-      else await this.cancelPreparation(preparation.setupId, 'RUNTIME_RECOVERY_UNAVAILABLE');
+      else await this.cancelPreparationBySetup(preparation.setupId, 'RUNTIME_RECOVERY_UNAVAILABLE');
     }
     const sessions = await this.dependencies.prisma.trGameSession.findMany({
       where: {
@@ -450,13 +430,49 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       throw new AppError(409, 'game_rule_unavailable', 'Aturan permainan belum tersedia.');
     const rule = ruleVersions[0]!;
     const ruleConfig = parseRule(input.mode, rule.config);
-    const config = input.mode === 'MOTOR_GRIP'
-      ? {
-          ...ruleConfig,
-          fruitVariant: FruitVariantSchema.parse(input.fruitVariant),
-          targetKilograms: MotorRuleSchema.parse(ruleConfig).fruitTargetsKilograms[FruitVariantSchema.parse(input.fruitVariant)],
-        }
-      : ruleConfig;
+    let config = ruleConfig;
+    if (input.mode === 'MOTOR_GRIP') {
+      const progression: readonly z.infer<typeof FruitVariantSchema>[] = [
+        'STRAWBERRY',
+        'TOMATO',
+        'BANANA',
+        'ORANGE',
+        'APPLE',
+        'WATERMELON',
+      ];
+      const results = input.participantReference
+        ? await this.dependencies.prisma.trGameResult.findMany({
+            where: {
+              institutionId: input.institutionId,
+              mode: 'MOTOR_GRIP',
+              gameRuleVersion: rule.version,
+              participant: { participantReference: input.participantReference },
+            },
+            select: { metrics: true },
+            orderBy: { completedAt: 'desc' },
+          })
+        : [];
+      const motorResults = results.flatMap((result) => {
+        const metrics = GameMetricsSchema.safeParse(result.metrics);
+        return metrics.success && metrics.data.mode === 'MOTOR_GRIP' ? [metrics.data] : [];
+      });
+      let level = 0;
+      while (level < progression.length - 1) {
+        const currentFruit = progression[level]!;
+        const recent = motorResults
+          .filter((metrics) => metrics.fruitVariant === currentFruit)
+          .slice(0, 3);
+        if (recent.filter((metrics) => metrics.targetCompleted).length < 2) break;
+        level += 1;
+      }
+      const fruitVariant = progression[level]!;
+      const motorRule = MotorRuleSchema.parse(ruleConfig);
+      config = {
+        ...ruleConfig,
+        fruitVariant,
+        targetKilograms: motorRule.fruitTargetsKilograms[fruitVariant],
+      };
+    }
     const activePreparation = await this.dependencies.prisma.trGamePreparation.findFirst({
       where: {
         institutionId: input.institutionId,
@@ -474,7 +490,6 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       const lock = await readMode3Lock(this.dependencies.redis);
       if (
         runtime &&
-        (input.mode !== 'MOTOR_GRIP' || runtime.config['fruitVariant'] === config['fruitVariant']) &&
         lock?.holderType === 'PREPARATION' &&
         lock.preparationId === activePreparation.preparationId &&
         lock.setupId === activePreparation.setupId
@@ -485,6 +500,9 @@ export class AuthoritativeRuntime implements RuntimeGateway {
           setupId: activePreparation.setupId,
           mode: activePreparation.mode,
           displayName: activePreparation.displayNameSnapshot,
+          ...(activePreparation.mode === 'MOTOR_GRIP'
+            ? { fruitVariant: FruitVariantSchema.parse(runtime.config['fruitVariant']) }
+            : {}),
           state: activePreparation.state,
           expiresAt: activePreparation.expiresAt.toISOString(),
           device: {
@@ -501,9 +519,11 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     }
     const readiness = await readDeviceReadiness(this.dependencies.redis);
     const requiredCapability = capabilityFor(input.mode);
+    const requiresTareCapability = input.mode !== 'SEQUENCE_MEMORY';
     if (
       readiness.readinessCode !== 'READY' ||
-      !readiness.capabilities.includes(requiredCapability)
+      !readiness.capabilities.includes(requiredCapability) ||
+      (requiresTareCapability && !readiness.capabilities.includes('FSR_TARED_ON_SETUP_BIND'))
     ) {
       this.dependencies.logger.warn(
         {
@@ -540,7 +560,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       state: 'BINDING_SETUP',
       setupBound: false,
       checkedButton: null,
-      calibrationState: input.mode === 'SEQUENCE_MEMORY' ? null : createCalibrationState(),
+      calibrationState: null,
       calibration: null,
       edge: { pressed: false, armed: true },
       practice: [],
@@ -606,6 +626,9 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       setupId,
       mode: input.mode,
       displayName: input.displayName,
+      ...(input.mode === 'MOTOR_GRIP'
+        ? { fruitVariant: FruitVariantSchema.parse(config['fruitVariant']) }
+        : {}),
       state: preparation.state,
       expiresAt: preparation.expiresAt.toISOString(),
       device: {
@@ -758,16 +781,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     };
     await this.saveSession(runtime);
     this.#activeSessions.add(sessionId);
-    await this.addCompanionPresence(
-      sessionId,
-      input.ownerSessionId,
-      `http:${input.requestId}`,
-      Date.now(),
-    );
-    runtime.companionPresent = true;
-    runtime.companionEverPresent = true;
-    await this.saveSession(runtime);
-    await this.publishSession(runtime, 'Menunggu perangkat.');
+    await this.publishSession(runtime, 'Menunggu perangkat dan aplikasi.');
     await updateMode3AssociationState(
       this.dependencies.redis,
       'SETUP',
@@ -999,7 +1013,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
   async interruptMode3(reason: string): Promise<void> {
     const lock = await readMode3Lock(this.dependencies.redis);
     if (!lock) return;
-    if (lock.holderType === 'PREPARATION') await this.cancelPreparation(lock.setupId, reason);
+    if (lock.holderType === 'PREPARATION') await this.cancelPreparationBySetup(lock.setupId, reason);
     else if (lock.sessionId) await this.interruptSession(lock.sessionId, reason);
   }
 
@@ -1012,7 +1026,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       select: { setupId: true },
     });
     for (const preparation of preparations)
-      await this.cancelPreparation(preparation.setupId, 'AUTH_SESSION_EXPIRED');
+      await this.cancelPreparationBySetup(preparation.setupId, 'AUTH_SESSION_EXPIRED');
     const sessions = await this.dependencies.prisma.trGameSession.findMany({
       where: { ownerSessionId, status: { in: ['BINDING', 'COUNTDOWN', 'PLAYING', 'PAUSED'] } },
       select: { id: true },
@@ -1024,7 +1038,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     association: { setupId?: string; sessionId?: string },
     reason: string,
   ): Promise<void> {
-    if (association.setupId) await this.cancelPreparation(association.setupId, reason);
+    if (association.setupId) await this.cancelPreparationBySetup(association.setupId, reason);
     if (association.sessionId) await this.interruptSession(association.sessionId, reason);
   }
 
@@ -1112,65 +1126,28 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     runtime.lastInput = input;
     runtime.lastCalibrationRaw = raw;
     if (runtime.state === 'CALIBRATING') {
-      if (!runtime.calibrationState) return;
       if (runtime.mode === 'MOTOR_GRIP') {
         const rule = MotorRuleSchema.parse(runtime.config);
-        appendCalibrationSample(
-          runtime.calibrationState,
-          raw,
-          rule.baselineMinimumSamples,
-          rule.activeMinimumSamples,
-        );
-        const calibration = calibrateMotorGrip(
-          runtime.calibrationState.baselineWindow,
-          runtime.calibrationState.activeWindow,
-          rule,
-        );
-        if (calibration.valid) {
-          runtime.calibration = {
-            baselineRaw: calibration.baselineRaw,
-            calibratedMaxRaw: calibration.calibratedMaxRaw,
-          };
-          runtime.calibrationState = null;
-          runtime.state = 'READY';
-          await this.markPreparationReady(runtime);
-        }
+        if (raw < rule.calibrationPressMinimumRaw) return;
+        runtime.calibration = {
+          baselineRaw: rule.baselineRaw,
+          calibratedMaxRaw: rule.calibratedMaxRaw,
+        };
+        runtime.calibrationState = null;
+        runtime.state = 'READY';
+        await this.markPreparationReady(runtime);
       } else if (runtime.mode === 'GO_NO_GO') {
         const rule = GoNoGoRuleSchema.parse(runtime.config);
-        appendCalibrationSample(
-          runtime.calibrationState,
-          raw,
-          rule.releaseMinimumSamples,
-          rule.pressMinimumSamples,
-        );
-        const calibration = calibrateGoNoGo(
-          runtime.calibrationState.baselineWindow,
-          runtime.calibrationState.activeWindow,
-          rule,
-        );
-        if (calibration.valid) {
-          runtime.calibration = {
-            pressThreshold: calibration.pressThreshold,
-            releaseThreshold: calibration.releaseThreshold,
-          };
-          runtime.calibrationState = null;
-          runtime.state = 'PRACTICING';
-          runtime.practice = createGoNoGoPracticePlan();
-          runtime.practiceDeadlineMs = input.receivedAtMs + COUNTDOWN_MS;
-          runtime.edge = { pressed: false, armed: false };
-          const updated = await this.dependencies.prisma.trGamePreparation.updateMany({
-            where: { setupId, state: 'CALIBRATING' },
-            data: { state: 'PRACTICING', calibrationSnapshot: toInputJson(runtime.calibration) },
-          });
-          if (updated.count === 0) return;
-        }
+        if (raw < rule.calibrationPressMinimumRaw) return;
+        runtime.calibration = {
+          pressThreshold: rule.pressThresholdRaw,
+          releaseThreshold: rule.releaseThresholdRaw,
+        };
+        runtime.calibrationState = null;
+        runtime.state = 'READY';
+        runtime.edge = { pressed: true, armed: false };
+        await this.markPreparationReady(runtime);
       }
-    } else if (runtime.mode === 'GO_NO_GO' && runtime.calibration) {
-      const pressThreshold = Number(runtime.calibration['pressThreshold']);
-      const releaseThreshold = Number(runtime.calibration['releaseThreshold']);
-      const transition = classifyFsrEdge(runtime.edge, raw, pressThreshold, releaseThreshold);
-      runtime.edge = transition.state;
-      if (transition.edge === 'PRESS') runtime.practicePressed = true;
     }
     await this.savePreparation(runtime);
     await this.publishPreparation(runtime);
@@ -1371,7 +1348,8 @@ export class AuthoritativeRuntime implements RuntimeGateway {
           baselineRaw: Number(runtime.calibration['baselineRaw']),
           calibratedMaxRaw: Number(runtime.calibration['calibratedMaxRaw']),
           fruitVariant: FruitVariantSchema.parse(runtime.config['fruitVariant']),
-          targetKilograms: z.number().positive().max(5).parse(runtime.config['targetKilograms']),
+          fullScaleKilograms: rule.fullScaleKilograms,
+          targetKilograms: z.number().positive().max(120).parse(runtime.config['targetKilograms']),
           targetHoldMs: rule.targetHoldMs,
           sessionDurationMs: rule.sessionDurationMs,
           telemetryGapMs: rule.telemetryGapMs,
@@ -1462,6 +1440,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       },
     });
     this.#nextFinalizationAttempts.set(runtime.sessionId, Date.now());
+    if (claimed.count === 1) await this.requestSessionCleanup(runtime.sessionId);
     const outcome =
       claimed.count === 1
         ? await this.persistFinalization(runtime.sessionId)
@@ -1590,30 +1569,32 @@ export class AuthoritativeRuntime implements RuntimeGateway {
               completedAt,
             },
           });
-          for (const [index, trial] of payload.trials.entries()) {
-            const value = recordFromUnknown(trial);
-            await tx.trGameTrial.create({
-              data: {
-                sessionId: session.id,
-                trialIndex: typeof value['trialIndex'] === 'number' ? value['trialIndex'] : index,
-                attemptIndex: typeof value['attemptIndex'] === 'number' ? value['attemptIndex'] : 0,
-                kind: typeof value['outcome'] === 'string' ? value['outcome'] : session.mode,
-                payload: toInputJson(value),
-                startedAt: new Date(
-                  typeof value['startedAtMs'] === 'number'
-                    ? value['startedAtMs']
-                    : typeof value['stimulusStartedAtMs'] === 'number'
-                      ? value['stimulusStartedAtMs']
-                      : completedAt.getTime(),
-                ),
-                closedAt: new Date(
-                  typeof value['closedAtMs'] === 'number'
-                    ? value['closedAtMs']
-                    : typeof value['responseClosedAtMs'] === 'number'
-                      ? value['responseClosedAtMs']
-                      : completedAt.getTime(),
-                ),
-              },
+          if (payload.trials.length > 0) {
+            await tx.trGameTrial.createMany({
+              data: payload.trials.map((trial, index) => {
+                const value = recordFromUnknown(trial);
+                return {
+                  sessionId: session.id,
+                  trialIndex: typeof value['trialIndex'] === 'number' ? value['trialIndex'] : index,
+                  attemptIndex: typeof value['attemptIndex'] === 'number' ? value['attemptIndex'] : 0,
+                  kind: typeof value['outcome'] === 'string' ? value['outcome'] : session.mode,
+                  payload: toInputJson(value),
+                  startedAt: new Date(
+                    typeof value['startedAtMs'] === 'number'
+                      ? value['startedAtMs']
+                      : typeof value['stimulusStartedAtMs'] === 'number'
+                        ? value['stimulusStartedAtMs']
+                        : completedAt.getTime(),
+                  ),
+                  closedAt: new Date(
+                    typeof value['closedAtMs'] === 'number'
+                      ? value['closedAtMs']
+                      : typeof value['responseClosedAtMs'] === 'number'
+                        ? value['responseClosedAtMs']
+                        : completedAt.getTime(),
+                  ),
+                };
+              }),
             });
           }
         }
@@ -1655,10 +1636,10 @@ export class AuthoritativeRuntime implements RuntimeGateway {
             metadata: { persistence: 'SAVED' },
           },
         );
-      });
+      }, { timeout: 30_000 });
       return 'SAVED';
     } catch (error) {
-      if (error instanceof PermanentFinalizationError) {
+      if (error instanceof PermanentFinalizationError || isPermanentPrismaSchemaError(error)) {
         const failed = await this.terminalizeFinalization(
           sessionId,
           finalizationFailureCode(error),
@@ -1668,7 +1649,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         return failed ? 'SAVE_FAILED' : null;
       }
       this.dependencies.logger.warn(
-        { err: error, sessionId },
+        { err: error, prismaCode: finalizationFailureCode(error), sessionId },
         'Finalisasi sesi gagal sementara; akan dicoba ulang',
       );
       return null;
@@ -1832,7 +1813,20 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     await this.terminateSession(sessionId, 'INTERRUPTED', reason);
   }
 
-  private async cancelPreparation(setupId: string, reason: string): Promise<void> {
+  async cancelPreparation(input: CancelRuntimePreparationInput): Promise<void> {
+    const preparation = await this.dependencies.prisma.trGamePreparation.findFirst({
+      where: {
+        preparationId: input.preparationId,
+        institutionId: input.institutionId,
+        ownerSessionId: input.ownerSessionId,
+      },
+      select: { setupId: true },
+    });
+    if (!preparation) throw new AppError(404, 'preparation_not_found', 'Persiapan tidak ditemukan.');
+    await this.cancelPreparationBySetup(preparation.setupId, 'USER_CANCELLED');
+  }
+
+  private async cancelPreparationBySetup(setupId: string, reason: string): Promise<void> {
     await this.terminatePreparation(setupId, 'CANCELLED', reason, new Date());
   }
 
@@ -2000,25 +1994,13 @@ export class AuthoritativeRuntime implements RuntimeGateway {
 
   private async publishPreparation(runtime: PreparationRuntime): Promise<void> {
     const trial = runtime.practice[runtime.practiceIndex];
-    const baselineMinimumSamples = runtime.mode === 'MOTOR_GRIP'
-      ? MotorRuleSchema.parse(runtime.config).baselineMinimumSamples
-      : runtime.mode === 'GO_NO_GO'
-        ? GoNoGoRuleSchema.parse(runtime.config).releaseMinimumSamples
-        : 0;
-    const collectingBaseline =
-      runtime.calibrationState !== null &&
-      runtime.calibrationState.baselineWindow.length < baselineMinimumSamples;
     const instruction =
       runtime.state === 'BINDING_SETUP'
         ? 'Menghubungkan perangkat.'
         : runtime.state === 'CALIBRATING'
           ? runtime.mode === 'SEQUENCE_MEMORY'
             ? 'Tekan satu tombol untuk memastikan perangkat merespons.'
-            : collectingBaseline
-              ? 'Lepaskan alat dan diamkan selama satu detik.'
-              : runtime.mode === 'MOTOR_GRIP'
-                ? 'Sekarang genggam kuat dengan nyaman dan tahan selama dua detik.'
-                : 'Sekarang genggam ringan dan tahan selama satu detik.'
+            : 'Genggam alat satu kali.'
           : runtime.state === 'PRACTICING'
             ? 'Latihan: genggam hanya saat Wayang muncul.'
             : runtime.state === 'READY'
@@ -2039,13 +2021,6 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         ...(runtime.calibration && typeof runtime.calibration['gripPercent'] === 'number'
           ? { gripPercent: runtime.calibration['gripPercent'] }
           : {}),
-        ...(runtime.lastCalibrationRaw === null ? {} : { sensorRaw: runtime.lastCalibrationRaw }),
-        ...(runtime.calibrationState === null
-          ? {}
-          : {
-              baselineSampleCount: runtime.calibrationState.baselineWindow.length,
-              activeSampleCount: runtime.calibrationState.activeWindow.length,
-            }),
         ...(runtime.mode === 'GO_NO_GO' && runtime.calibration
           ? { pressed: runtime.edge.pressed }
           : {}),
