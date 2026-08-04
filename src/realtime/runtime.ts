@@ -1388,7 +1388,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     }
     for (const sessionId of [...this.#activeSessions]) {
       if (this.#nextFinalizationAttempts.has(sessionId)) continue;
-      await this.runSessionMutation(sessionId, () => this.tickSession(sessionId, now));
+      await this.runSessionMutation(sessionId, () => this.tickSession(sessionId, Date.now()));
     }
   }
 

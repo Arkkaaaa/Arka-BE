@@ -7,6 +7,7 @@ const SUPPORTED_DEVICE_FIRMWARE: Readonly<Record<string, true>> = {
   '0.2.1': true,
   '0.2.2': true,
   '0.2.3': true,
+  '0.2.4': true,
 };
 
 export const GAME12_DEVICE_ID = 'game12-primary';
