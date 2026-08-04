@@ -494,6 +494,14 @@ export class DeviceRealtimeGateway {
       connectionId: connection.connectionId,
       bootId: connection.hello.bootId,
     });
+    this.dependencies.logger.info(
+      {
+        connectionId: connection.connectionId,
+        firmwareVersion: connection.hello.payload.firmwareVersion,
+        readinessCode: decision.readinessCode,
+      },
+      'Status kesiapan perangkat diperbarui',
+    );
     if (decision.interruptionReason) await this.runtime.interruptMode3(decision.interruptionReason);
   }
 
