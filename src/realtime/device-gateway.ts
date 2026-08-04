@@ -2,16 +2,21 @@ import { randomUUID } from 'node:crypto';
 import WebSocket, { WebSocketServer, type RawData } from 'ws';
 import { issueDeviceChallenge, verifyDeviceProof } from '../device/authentication.js';
 import {
-  acknowledgeMode3Command,
+  acknowledgeDeviceCommand,
   commandToWire,
-  deleteMode3Association,
-  listMode3Commands,
-  markMode3CommandDispatched,
-  readMode3Association,
-  readMode3Lock,
-  releaseMode3Lock,
-  updateMode3AssociationState,
+  deleteDeviceAssociation,
+  listDeviceCommands,
+  markDeviceCommandDispatched,
+  readDeviceAssociation,
+  readDeviceLock,
+  releaseDeviceLock,
+  updateDeviceAssociationState,
 } from '../device/commands.js';
+import {
+  deviceFamilyForHello,
+  redisPrefixForFamily,
+  type DeviceFamily,
+} from '../device/family.js';
 import {
   DEVICE_MAX_MESSAGE_BYTES,
   DEVICE_STALE_AFTER_MS,
@@ -28,9 +33,8 @@ import {
   type DeviceHello,
 } from '../device/protocol.js';
 import {
-  MODE3_DEVICE_ID,
   isDeviceFirmwareCompatible,
-  offlineMode3Readiness,
+  offlineDeviceReadiness,
   readDeviceReadiness,
   writeDeviceReadiness,
   type DeviceReadiness,
@@ -39,8 +43,11 @@ import { enforceDeviceSequence } from '../device/sequence.js';
 import type { AuthoritativeRuntime } from './runtime.js';
 import type { RealtimeDependencies } from './types.js';
 
-const CONNECTION_KEY = 'arka:{mode3}:connection';
 const CONNECTION_TTL_SECONDS = 15;
+
+function connectionKey(family: DeviceFamily): string {
+  return `${redisPrefixForFamily(family)}:connection`;
+}
 const COMMAND_POLL_MS = 25;
 export const DEVICE_READINESS_LOW_BATTERY_PERCENT = 10;
 export const DEVICE_INTERRUPT_LOW_BATTERY_PERCENT = 10;
@@ -61,6 +68,7 @@ return 0
 
 interface AuthenticatedConnection {
   readonly socket: WebSocket;
+  readonly family: DeviceFamily;
   readonly hello: DeviceHello;
   readonly connectionId: string;
   readonly firmwareCompatible: boolean;
@@ -161,6 +169,7 @@ export class DeviceRealtimeGateway {
 
   private accept(socket: WebSocket): void {
     let hello: DeviceHello | null = null;
+    let family: DeviceFamily | null = null;
     let connection: AuthenticatedConnection | null = null;
     let processing = Promise.resolve();
     let closing = false;
@@ -188,12 +197,16 @@ export class DeviceRealtimeGateway {
         const released = await this.dependencies.redis.eval(
           RELEASE_CONNECTION_SCRIPT,
           1,
-          CONNECTION_KEY,
+          connectionKey(connection.family),
           connection.connectionId,
         );
         if (Number(released) !== 1) return;
-        await writeDeviceReadiness(this.dependencies.redis, offlineMode3Readiness());
-        await this.runtime.interruptMode3(reason);
+        await writeDeviceReadiness(
+          this.dependencies.redis,
+          connection.family,
+          offlineDeviceReadiness(),
+        );
+        await this.runtime.interruptDeviceFamily(connection.family, reason);
       })().finally(() => this.#connections.delete(socketConnection));
       return this.trackCleanup(cleanupPromise);
     };
@@ -246,6 +259,7 @@ export class DeviceRealtimeGateway {
           } catch {
             if (connection)
               await this.runtime.interruptAssociation(
+                connection.family,
                 associationFromUnknown(parsedUnknown),
                 'MALFORMED_DEVICE_INPUT',
               );
@@ -261,11 +275,16 @@ export class DeviceRealtimeGateway {
               return;
             }
             hello = parsedHello.data;
+            family = deviceFamilyForHello(hello);
+            if (!family) {
+              closeProtocol(socket, 'Kapabilitas perangkat ditolak');
+              return;
+            }
             if (!this.dependencies.env.DEVICE_SECRET_BASE64) {
               closeProtocol(socket, 'Identitas perangkat ditolak');
               return;
             }
-            const challenge = await issueDeviceChallenge(this.dependencies.redis, hello);
+            const challenge = await issueDeviceChallenge(this.dependencies.redis, family, hello);
             send(
               socket,
               DeviceChallengeSchema.parse({
@@ -286,21 +305,22 @@ export class DeviceRealtimeGateway {
             if (
               !prove.success ||
               !secret ||
-              !(await verifyDeviceProof(this.dependencies.redis, prove.data, hello, secret))
+              !family ||
+              !(await verifyDeviceProof(this.dependencies.redis, family, prove.data, hello, secret))
             ) {
               closeProtocol(socket, 'Bukti perangkat ditolak');
               return;
             }
             const connectionId = randomUUID();
             const acquired = await this.dependencies.redis.set(
-              CONNECTION_KEY,
+              connectionKey(family),
               connectionId,
               'EX',
               CONNECTION_TTL_SECONDS,
               'NX',
             );
             if (acquired !== 'OK') {
-              const readiness = await readDeviceReadiness(this.dependencies.redis);
+              const readiness = await readDeviceReadiness(this.dependencies.redis, family);
               this.dependencies.logger.info(
                 { activeConnectionId: readiness.connectionId, lastSeenAt: readiness.lastSeenAt },
                 'Proof perangkat ditolak karena koneksi aktif',
@@ -311,6 +331,7 @@ export class DeviceRealtimeGateway {
             const now = Date.now();
             connection = {
               socket,
+              family,
               hello,
               connectionId,
               firmwareCompatible: isDeviceFirmwareCompatible(hello.payload.firmwareVersion),
@@ -331,7 +352,7 @@ export class DeviceRealtimeGateway {
             };
             connection.commandTimer.unref();
             connection.staleTimer.unref();
-            await writeDeviceReadiness(this.dependencies.redis, {
+            await writeDeviceReadiness(this.dependencies.redis, family, {
               connectionStatus: connection.firmwareCompatible ? 'ONLINE' : 'CONNECTING',
               readinessCode: connection.firmwareCompatible
                 ? 'NOT_READY_BATTERY_UNKNOWN'
@@ -371,13 +392,14 @@ export class DeviceRealtimeGateway {
           const authenticated = message;
           const decision = await enforceDeviceSequence(
             this.dependencies.redis,
-            MODE3_DEVICE_ID,
+            connection.family,
             connection.hello.bootId,
             authenticated,
           );
           if (decision === 'DUPLICATE' || decision === 'TELEMETRY_DROPPED') return;
           if (decision !== 'ACCEPT') {
             await this.runtime.interruptAssociation(
+              connection.family,
               associationFromUnknown(authenticated),
               `DEVICE_SEQUENCE_${decision}`,
             );
@@ -388,7 +410,7 @@ export class DeviceRealtimeGateway {
           const renewed = await this.dependencies.redis.eval(
             REFRESH_CONNECTION_SCRIPT,
             1,
-            CONNECTION_KEY,
+            connectionKey(connection.family),
             connection.connectionId,
             String(CONNECTION_TTL_SECONDS),
           );
@@ -417,12 +439,14 @@ export class DeviceRealtimeGateway {
               ? { type: 'SETUP' as const, id: authenticated.setupId }
               : { type: 'SESSION' as const, id: authenticated.sessionId };
           const associationDecision = await this.associationDecision(
+            connection.family,
             association.type,
             association.id,
           );
           if (associationDecision === 'DROP') return;
           if (associationDecision === 'REJECT') {
             await this.runtime.interruptAssociation(
+              connection.family,
               association.type === 'SETUP'
                 ? { setupId: association.id }
                 : { sessionId: association.id },
@@ -445,8 +469,19 @@ export class DeviceRealtimeGateway {
               ? { setupId: association.id }
               : { sessionId: association.id };
           if (authenticated.type === 'telemetry.fsr')
-            await this.runtime.handleFsr(target, authenticated.payload.fsrRaw, trustedInput);
-          else await this.runtime.handleButton(target, authenticated.payload.buttonCode, trustedInput);
+            await this.runtime.handleFsr(
+              connection.family,
+              target,
+              authenticated.payload.fsrRaw,
+              trustedInput,
+            );
+          else
+            await this.runtime.handleButton(
+              connection.family,
+              target,
+              authenticated.payload.buttonCode,
+              trustedInput,
+            );
         })
         .catch((error) => {
           this.dependencies.logger.warn({ err: error }, 'Pesan perangkat gagal diproses');
@@ -456,12 +491,13 @@ export class DeviceRealtimeGateway {
   }
 
   private async associationDecision(
+    family: DeviceFamily,
     type: 'SETUP' | 'SESSION',
     id: string,
   ): Promise<'ALLOW' | 'DROP' | 'REJECT'> {
     const [association, lock] = await Promise.all([
-      readMode3Association(this.dependencies.redis, type, id),
-      readMode3Lock(this.dependencies.redis),
+      readDeviceAssociation(this.dependencies.redis, family, type, id),
+      readDeviceLock(this.dependencies.redis, family),
     ]);
     if (association?.state === 'BOUND' && association.lockId === lock?.lockId) return 'ALLOW';
     if (
@@ -476,7 +512,7 @@ export class DeviceRealtimeGateway {
   }
 
   private async updateReadiness(connection: AuthenticatedConnection): Promise<void> {
-    const lock = await readMode3Lock(this.dependencies.redis);
+    const lock = await readDeviceLock(this.dependencies.redis, connection.family);
     const health = connection.lastHealth;
     const batteryPercent = health.battery.valid ? (health.battery.percent ?? null) : null;
     const decision = decideDeviceHealth(
@@ -484,7 +520,7 @@ export class DeviceRealtimeGateway {
       lock?.state ?? null,
       connection.firmwareCompatible,
     );
-    await writeDeviceReadiness(this.dependencies.redis, {
+    await writeDeviceReadiness(this.dependencies.redis, connection.family, {
       connectionStatus: connection.firmwareCompatible ? 'ONLINE' : 'CONNECTING',
       readinessCode: decision.readinessCode,
       firmwareVersion: connection.hello.payload.firmwareVersion,
@@ -502,7 +538,8 @@ export class DeviceRealtimeGateway {
       },
       'Status kesiapan perangkat diperbarui',
     );
-    if (decision.interruptionReason) await this.runtime.interruptMode3(decision.interruptionReason);
+    if (decision.interruptionReason)
+      await this.runtime.interruptDeviceFamily(connection.family, decision.interruptionReason);
   }
 
   private async handleAcknowledgement(
@@ -510,51 +547,65 @@ export class DeviceRealtimeGateway {
     message: Extract<AuthenticatedDeviceMessage, { type: 'device.commandAck' }>,
   ): Promise<void> {
     const associationId = 'setupId' in message ? message.setupId : message.sessionId;
-    const acknowledged = await acknowledgeMode3Command(this.dependencies.redis, {
+    const associationType = 'setupId' in message ? 'SETUP' : 'SESSION';
+    const acknowledged = await acknowledgeDeviceCommand(
+      this.dependencies.redis,
+      connection.family,
+      {
       commandId: message.payload.commandId,
       associationId,
+      associationType,
       connectionId: connection.connectionId,
       bootId: connection.hello.bootId,
       outcome: message.payload.outcome,
       ...(message.payload.reason ? { reason: message.payload.reason } : {}),
     });
     if (!acknowledged) {
-      await this.runtime.interruptAssociation(associationFromUnknown(message), 'INVALID_COMMAND_ACK');
+      await this.runtime.interruptAssociation(
+        connection.family,
+        associationFromUnknown(message),
+        'INVALID_COMMAND_ACK',
+      );
       throw new Error('ACK perangkat tidak sesuai perintah aktif');
     }
     if (acknowledged.duplicate) return;
     const command = acknowledged.command;
     if (message.payload.outcome === 'NACK') {
       await this.runtime.interruptAssociation(
+        connection.family,
         associationFromUnknown(message),
         `DEVICE_COMMAND_NACK_${message.payload.reason}`,
       );
       return;
     }
     if (command.kind === 'SETUP_BIND' && 'setupId' in message) {
-      await updateMode3AssociationState(
+      const updated = await updateDeviceAssociationState(
         this.dependencies.redis,
+        connection.family,
         'SETUP',
         message.setupId,
         command.lockId,
         'BOUND',
       );
-      await this.runtime.handleSetupBound(message.setupId);
+      if (!updated) throw new Error('Asosiasi setup perangkat sudah berubah');
+      await this.runtime.handleSetupBound(connection.family, message.setupId);
     } else if (command.kind === 'SETUP_UNBIND' && 'setupId' in message) {
-      await deleteMode3Association(this.dependencies.redis, 'SETUP', message.setupId);
-      await this.runtime.handleSetupUnbound(message.setupId, command.commandId);
+      await deleteDeviceAssociation(this.dependencies.redis, connection.family, 'SETUP', message.setupId);
+      await this.runtime.handleSetupUnbound(connection.family, message.setupId, command.commandId);
     } else if (command.kind === 'SESSION_BIND' && 'sessionId' in message) {
-      await updateMode3AssociationState(
+      const updated = await updateDeviceAssociationState(
         this.dependencies.redis,
+        connection.family,
         'SESSION',
         message.sessionId,
         command.lockId,
         'BOUND',
       );
-      await this.runtime.handleSessionBound(message.sessionId);
+      if (!updated) throw new Error('Asosiasi sesi perangkat sudah berubah');
+      await this.runtime.handleSessionBound(connection.family, message.sessionId);
     } else if (command.kind === 'SESSION_UNBIND' && 'sessionId' in message) {
-      await deleteMode3Association(this.dependencies.redis, 'SESSION', message.sessionId);
-      await releaseMode3Lock(this.dependencies.redis, command.lockId);
+      await deleteDeviceAssociation(this.dependencies.redis, connection.family, 'SESSION', message.sessionId);
+      await releaseDeviceLock(this.dependencies.redis, connection.family, command.lockId);
       await this.updateReadiness(connection);
     }
   }
@@ -568,11 +619,12 @@ export class DeviceRealtimeGateway {
       return;
     connection.dispatching = true;
     try {
-      const lock = await readMode3Lock(this.dependencies.redis);
-      for (const command of await listMode3Commands(this.dependencies.redis)) {
+      const lock = await readDeviceLock(this.dependencies.redis, connection.family);
+      for (const command of await listDeviceCommands(this.dependencies.redis, connection.family)) {
         if (!lock || command.lockId !== lock.lockId) continue;
-        const claimed = await markMode3CommandDispatched(
+        const claimed = await markDeviceCommandDispatched(
           this.dependencies.redis,
+          connection.family,
           command,
           connection.connectionId,
           connection.hello.bootId,

@@ -1,4 +1,5 @@
 import type { Redis } from 'ioredis';
+import { redisPrefixForFamily, type DeviceFamily } from './family.js';
 import type { AuthenticatedDeviceMessage } from './protocol.js';
 import { DEVICE_MAX_MESSAGES_PER_SECOND, DEVICE_MAX_SEQUENCE_GAP } from './protocol.js';
 
@@ -40,12 +41,12 @@ return 'ACCEPT'
 
 export async function enforceDeviceSequence(
   redis: Redis,
-  deviceKey: string,
+  family: DeviceFamily,
   bootId: string,
   message: AuthenticatedDeviceMessage,
   receivedAtMs = Date.now(),
 ): Promise<DeviceSequenceDecision> {
-  const prefix = `arka:device:boot:${deviceKey}:${bootId}`;
+  const prefix = `${redisPrefixForFamily(family)}:device:boot:${bootId}`;
   const second = Math.floor(receivedAtMs / 1_000);
   const result = await redis.eval(
     ENFORCE_SEQUENCE_SCRIPT,

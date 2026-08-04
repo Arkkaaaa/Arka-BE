@@ -20,19 +20,24 @@ import {
   upsertParticipantSummary,
 } from '../services/participant-summary.js';
 import {
-  acquireMode3Lock,
-  clearMode3Ownership,
-  enqueueMode3Command,
-  readMode3Association,
-  readMode3Lock,
-  refreshMode3Lock,
-  transitionMode3Lock,
-  updateMode3AssociationState,
-  writeMode3Association,
+  acquireDeviceLock,
+  clearDeviceOwnership,
+  enqueueDeviceCommand,
+  readDeviceAssociation,
+  readDeviceLock,
+  refreshDeviceLock,
+  transitionDeviceLock,
+  updateDeviceAssociationState,
+  writeDeviceAssociation,
 } from '../device/commands.js';
 import {
-  deviceLabelForCapabilities,
-  MODE3_DEVICE_ID,
+  DEVICE_FAMILIES,
+  deviceFamilyForMode,
+  type DeviceFamily,
+} from '../device/family.js';
+import {
+  deviceIdForFamily,
+  deviceLabelForFamily,
   readDeviceReadiness,
 } from '../device/readiness.js';
 import type { DeviceButtonCodeSchema } from '../device/protocol.js';
@@ -80,7 +85,7 @@ const COMPANION_PRESENCE_CHECK_MS = 1_000;
 const FINALIZATION_RECOVERY_MS = RUNTIME_TTL_SECONDS * 1_000;
 const FINALIZATION_LEASE_MS = 30_000;
 const FINALIZATION_RETRY_MS = 1_000;
-const MODE3_LOCK_REFRESH_MS = 10_000;
+const DEVICE_LOCK_REFRESH_MS = 10_000;
 const ADD_COMPANION_PRESENCE_SCRIPT = `
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
 redis.call('ZADD', KEYS[1], ARGV[2], ARGV[3])
@@ -331,8 +336,9 @@ export class AuthoritativeRuntime implements RuntimeGateway {
   readonly #activeSetups = new Set<string>();
   readonly #nextPresenceChecks = new Map<string, number>();
   readonly #nextFinalizationAttempts = new Map<string, number>();
+  readonly #sessionMutations = new Map<string, Promise<void>>();
   #nextPreparationExpirySweepMs = 0;
-  #nextMode3LockRefreshMs = 0;
+  #nextDeviceLockRefreshMs = 0;
   #tickActive = false;
   #timer: NodeJS.Timeout | null = null;
 
@@ -353,6 +359,20 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     },
   ) {
     this.events = new RealtimeEventStore(dependencies.redis);
+  }
+
+  private runSessionMutation<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.#sessionMutations.get(sessionId) ?? Promise.resolve();
+    const result = previous.then(operation, operation);
+    const settled = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    this.#sessionMutations.set(sessionId, settled);
+    void settled.finally(() => {
+      if (this.#sessionMutations.get(sessionId) === settled) this.#sessionMutations.delete(sessionId);
+    });
+    return result;
   }
 
   start(): void {
@@ -429,6 +449,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     if (ruleVersions.length !== 1)
       throw new AppError(409, 'game_rule_unavailable', 'Aturan permainan belum tersedia.');
     const rule = ruleVersions[0]!;
+    const family = deviceFamilyForMode(input.mode);
     const ruleConfig = parseRule(input.mode, rule.config);
     let config = ruleConfig;
     if (input.mode === 'MOTOR_GRIP') {
@@ -487,14 +508,14 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     });
     if (activePreparation) {
       const runtime = await this.loadPreparation(activePreparation.setupId);
-      const lock = await readMode3Lock(this.dependencies.redis);
+      const lock = await readDeviceLock(this.dependencies.redis, family);
       if (
         runtime &&
         lock?.holderType === 'PREPARATION' &&
         lock.preparationId === activePreparation.preparationId &&
         lock.setupId === activePreparation.setupId
       ) {
-        const readiness = await readDeviceReadiness(this.dependencies.redis);
+        const readiness = await readDeviceReadiness(this.dependencies.redis, family);
         return PreparationDtoSchema.parse({
           preparationId: activePreparation.preparationId,
           setupId: activePreparation.setupId,
@@ -506,8 +527,9 @@ export class AuthoritativeRuntime implements RuntimeGateway {
           state: activePreparation.state,
           expiresAt: activePreparation.expiresAt.toISOString(),
           device: {
-            deviceId: MODE3_DEVICE_ID,
-            label: deviceLabelForCapabilities(readiness.capabilities),
+            deviceId: deviceIdForFamily(family),
+            family,
+            label: deviceLabelForFamily(family),
             readinessCode: readiness.readinessCode,
           },
           setupBound: runtime.setupBound,
@@ -517,7 +539,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         });
       }
     }
-    const readiness = await readDeviceReadiness(this.dependencies.redis);
+    const readiness = await readDeviceReadiness(this.dependencies.redis, family);
     const requiredCapability = capabilityFor(input.mode);
     const requiresTareCapability = input.mode !== 'SEQUENCE_MEMORY';
     if (
@@ -542,7 +564,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     const ttlMs = this.dependencies.env?.PREPARATION_TTL_MS ?? 300_000;
     const setupId = randomUUID();
     const preparationId = randomBytes(24).toString('base64url');
-    const lock = await acquireMode3Lock(this.dependencies.redis, {
+    const lock = await acquireDeviceLock(this.dependencies.redis, family, {
       institutionId: input.institutionId,
       ownerSessionId: input.ownerSessionId,
       holderType: 'PREPARATION',
@@ -597,7 +619,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
           expiresAt: new Date(now.getTime() + ttlMs),
         },
       });
-      await writeMode3Association(this.dependencies.redis, {
+      await writeDeviceAssociation(this.dependencies.redis, family, {
         lockId: lock.lockId,
         associationId: setupId,
         type: 'SETUP',
@@ -606,7 +628,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       await this.savePreparation(runtime);
       this.#activeSetups.add(setupId);
       await this.publishPreparation(runtime);
-      await enqueueMode3Command(this.dependencies.redis, {
+      await enqueueDeviceCommand(this.dependencies.redis, family, {
         lockId: lock.lockId,
         associationId: setupId,
         kind: 'SETUP_BIND',
@@ -618,7 +640,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     } catch (error) {
       this.#activeSetups.delete(setupId);
       await this.dependencies.redis.del(prepKey(setupId));
-      await clearMode3Ownership(this.dependencies.redis, lock.lockId);
+      await clearDeviceOwnership(this.dependencies.redis, family, lock.lockId);
       throw error;
     }
     return PreparationDtoSchema.parse({
@@ -632,8 +654,9 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       state: preparation.state,
       expiresAt: preparation.expiresAt.toISOString(),
       device: {
-        deviceId: MODE3_DEVICE_ID,
-        label: deviceLabelForCapabilities(readiness.capabilities),
+        deviceId: deviceIdForFamily(family),
+        family,
+        label: deviceLabelForFamily(family),
         readinessCode: readiness.readinessCode,
       },
       setupBound: false,
@@ -669,8 +692,9 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       throw new AppError(404, 'preparation_not_found', 'Persiapan tidak ditemukan.');
     if (preparation.state !== 'READY' || preparation.expiresAt <= new Date())
       throw new AppError(409, 'preparation_not_ready', 'Persiapan belum siap dimulai.');
+    const family = deviceFamilyForMode(preparation.mode);
     const setup = await this.loadPreparation(preparation.setupId);
-    const currentLock = await readMode3Lock(this.dependencies.redis);
+    const currentLock = await readDeviceLock(this.dependencies.redis, family);
     if (
       !setup ||
       !currentLock ||
@@ -693,7 +717,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       status: 'BINDING',
       bindingDeadlineAt: bindingDeadlineAt.toISOString(),
     });
-    const sessionLock = await transitionMode3Lock(this.dependencies.redis, currentLock, {
+    const sessionLock = await transitionDeviceLock(this.dependencies.redis, family, currentLock, {
       holderType: 'SESSION',
       sessionId,
       state: 'HELD',
@@ -752,7 +776,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         });
       });
     } catch (error) {
-      await transitionMode3Lock(this.dependencies.redis, sessionLock, {
+      await transitionDeviceLock(this.dependencies.redis, family, sessionLock, {
         holderType: 'PREPARATION',
         sessionId: null,
         state: 'HELD',
@@ -782,14 +806,15 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     await this.saveSession(runtime);
     this.#activeSessions.add(sessionId);
     await this.publishSession(runtime, 'Menunggu perangkat dan aplikasi.');
-    await updateMode3AssociationState(
+    await updateDeviceAssociationState(
       this.dependencies.redis,
+      family,
       'SETUP',
       preparation.setupId,
       sessionLock.lockId,
       'UNBINDING',
     );
-    await enqueueMode3Command(this.dependencies.redis, {
+    await enqueueDeviceCommand(this.dependencies.redis, family, {
       lockId: sessionLock.lockId,
       associationId: preparation.setupId,
       kind: 'SETUP_UNBIND',
@@ -801,7 +826,11 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     return response;
   }
 
-  async commandSession(input: CommandRuntimeSessionInput): Promise<GameSessionDto> {
+  commandSession(input: CommandRuntimeSessionInput): Promise<GameSessionDto> {
+    return this.runSessionMutation(input.sessionId, () => this.commandSessionUnlocked(input));
+  }
+
+  private async commandSessionUnlocked(input: CommandRuntimeSessionInput): Promise<GameSessionDto> {
     const session = await this.dependencies.prisma.trGameSession.findFirst({
       where: {
         id: input.sessionId,
@@ -811,6 +840,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       include: { result: true, aiSummary: true },
     });
     if (!session) throw new AppError(404, 'session_not_found', 'Sesi tidak ditemukan.');
+    const family = deviceFamilyForMode(session.mode);
     const runtime = await this.loadSession(session.id);
     if (input.command === 'ABORT') {
       if (
@@ -839,7 +869,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         },
       });
       if (updated.count === 0) return this.readSessionDto(session.id, input.institutionId);
-      await enqueueMode3Command(this.dependencies.redis, {
+      await enqueueDeviceCommand(this.dependencies.redis, family, {
         lockId: runtime.lockId,
         associationId: runtime.sessionId,
         sessionId: runtime.sessionId,
@@ -871,7 +901,17 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     return this.readSessionDto(session.id, input.institutionId);
   }
 
-  async companionArrived(
+  companionArrived(
+    sessionId: string,
+    ownerSessionId: string,
+    connectionId: string,
+  ): Promise<boolean> {
+    return this.runSessionMutation(sessionId, () =>
+      this.companionArrivedUnlocked(sessionId, ownerSessionId, connectionId),
+    );
+  }
+
+  private async companionArrivedUnlocked(
     sessionId: string,
     ownerSessionId: string,
     connectionId: string,
@@ -899,7 +939,17 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     return true;
   }
 
-  async companionRefreshed(
+  companionRefreshed(
+    sessionId: string,
+    ownerSessionId: string,
+    connectionId: string,
+  ): Promise<void> {
+    return this.runSessionMutation(sessionId, () =>
+      this.companionRefreshedUnlocked(sessionId, ownerSessionId, connectionId),
+    );
+  }
+
+  private async companionRefreshedUnlocked(
     sessionId: string,
     ownerSessionId: string,
     connectionId: string,
@@ -913,7 +963,17 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     await this.maybeBeginCountdown(runtime);
   }
 
-  async companionDeparted(
+  companionDeparted(
+    sessionId: string,
+    ownerSessionId: string,
+    connectionId: string,
+  ): Promise<void> {
+    return this.runSessionMutation(sessionId, () =>
+      this.companionDepartedUnlocked(sessionId, ownerSessionId, connectionId),
+    );
+  }
+
+  private async companionDepartedUnlocked(
     sessionId: string,
     ownerSessionId: string,
     connectionId: string,
@@ -930,9 +990,14 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     await this.noteLastCompanionAbsent(runtime, Date.now());
   }
 
-  async handleSetupBound(setupId: string): Promise<void> {
+  async handleSetupBound(family: DeviceFamily, setupId: string): Promise<void> {
     const runtime = await this.loadPreparation(setupId);
-    if (!runtime || runtime.state !== 'BINDING_SETUP') return;
+    if (
+      !runtime ||
+      deviceFamilyForMode(runtime.mode) !== family ||
+      runtime.state !== 'BINDING_SETUP'
+    )
+      return;
     runtime.setupBound = true;
     runtime.state = 'CALIBRATING';
     const updated = await this.dependencies.prisma.trGamePreparation.updateMany({
@@ -944,25 +1009,30 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     await this.publishPreparation(runtime);
   }
 
-  async handleSetupUnbound(setupId: string, _commandId: string): Promise<void> {
+  async handleSetupUnbound(
+    family: DeviceFamily,
+    setupId: string,
+    _commandId: string,
+  ): Promise<void> {
     const session = await this.dependencies.prisma.trGameSession.findFirst({
       where: { preparation: { setupId }, status: 'BINDING' },
     });
+    if (session && deviceFamilyForMode(session.mode) !== family) return;
     if (!session) {
-      const lock = await readMode3Lock(this.dependencies.redis);
-      if (lock?.setupId === setupId) await clearMode3Ownership(this.dependencies.redis, lock.lockId);
+      const lock = await readDeviceLock(this.dependencies.redis, family);
+      if (lock?.setupId === setupId) await clearDeviceOwnership(this.dependencies.redis, family, lock.lockId);
       return;
     }
     const runtime = await this.loadSession(session.id);
-    const lock = await readMode3Lock(this.dependencies.redis);
+    const lock = await readDeviceLock(this.dependencies.redis, family);
     if (!runtime || !lock || lock.lockId !== runtime.lockId || lock.sessionId !== session.id) return;
-    await writeMode3Association(this.dependencies.redis, {
+    await writeDeviceAssociation(this.dependencies.redis, family, {
       lockId: lock.lockId,
       associationId: session.id,
       type: 'SESSION',
       state: 'BINDING',
     });
-    await enqueueMode3Command(this.dependencies.redis, {
+    await enqueueDeviceCommand(this.dependencies.redis, family, {
       lockId: lock.lockId,
       associationId: session.id,
       sessionId: session.id,
@@ -972,9 +1042,13 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     });
   }
 
-  async handleSessionBound(sessionId: string): Promise<void> {
+  async handleSessionBound(family: DeviceFamily, sessionId: string): Promise<void> {
     const updated = await this.dependencies.prisma.trGameSession.updateMany({
-      where: { id: sessionId, status: 'BINDING' },
+      where: {
+        id: sessionId,
+        mode: family === 'MODE3' ? 'SEQUENCE_MEMORY' : { in: ['MOTOR_GRIP', 'GO_NO_GO'] },
+        status: 'BINDING',
+      },
       data: { sessionBoundAt: new Date() },
     });
     if (updated.count === 0) return;
@@ -984,37 +1058,58 @@ export class AuthoritativeRuntime implements RuntimeGateway {
   }
 
   async handleFsr(
+    family: DeviceFamily,
     association: { setupId?: string; sessionId?: string },
     raw: number,
     input: TrustedDeviceInput,
   ): Promise<void> {
+    if (family !== 'GAME12') throw new Error('Family perangkat tidak sesuai input FSR');
     if (!Number.isInteger(raw) || raw < FSR_RAW_MIN || raw > FSR_RAW_MAX) {
       throw new RangeError('FSR telemetry must be an integer from 0 through 4095');
     }
-    if (association.setupId) await this.handlePreparationFsr(association.setupId, raw, input);
-    else if (association.sessionId)
+    if (association.setupId) {
+      const runtime = await this.loadPreparation(association.setupId);
+      if (!runtime || deviceFamilyForMode(runtime.mode) !== family) return;
+      await this.handlePreparationFsr(association.setupId, raw, input);
+    } else if (association.sessionId) {
+      const runtime = await this.loadSession(association.sessionId);
+      if (!runtime || deviceFamilyForMode(runtime.mode) !== family) return;
       await this.handleSessionInput(association.sessionId, { kind: 'FSR', raw }, input);
+    }
   }
 
   async handleButton(
+    family: DeviceFamily,
     association: { setupId?: string; sessionId?: string },
     buttonCode: ButtonCode,
     input: TrustedDeviceInput,
   ): Promise<void> {
+    if (family !== 'MODE3') throw new Error('Family perangkat tidak sesuai input tombol');
     if (association.setupId) {
+      const runtime = await this.loadPreparation(association.setupId);
+      if (!runtime || deviceFamilyForMode(runtime.mode) !== family) return;
       await this.handlePreparationButton(association.setupId, buttonCode, input);
       return;
     }
     if (association.sessionId) {
+      const runtime = await this.loadSession(association.sessionId);
+      if (!runtime || deviceFamilyForMode(runtime.mode) !== family) return;
       await this.handleSessionInput(association.sessionId, { kind: 'BUTTON', buttonCode }, input);
     }
   }
 
-  async interruptMode3(reason: string): Promise<void> {
-    const lock = await readMode3Lock(this.dependencies.redis);
+  async interruptDeviceFamily(family: DeviceFamily, reason: string): Promise<void> {
+    const lock = await readDeviceLock(this.dependencies.redis, family);
     if (!lock) return;
-    if (lock.holderType === 'PREPARATION') await this.cancelPreparationBySetup(lock.setupId, reason);
-    else if (lock.sessionId) await this.interruptSession(lock.sessionId, reason);
+    if (lock.holderType === 'PREPARATION') {
+      const runtime = await this.loadPreparation(lock.setupId);
+      if (runtime && deviceFamilyForMode(runtime.mode) === family)
+        await this.cancelPreparationBySetup(lock.setupId, reason);
+    } else if (lock.sessionId) {
+      const runtime = await this.loadSession(lock.sessionId);
+      if (runtime && deviceFamilyForMode(runtime.mode) === family)
+        await this.interruptSession(lock.sessionId, reason);
+    }
   }
 
   async expireOwnerSession(ownerSessionId: string): Promise<void> {
@@ -1035,11 +1130,20 @@ export class AuthoritativeRuntime implements RuntimeGateway {
   }
 
   async interruptAssociation(
+    family: DeviceFamily,
     association: { setupId?: string; sessionId?: string },
     reason: string,
   ): Promise<void> {
-    if (association.setupId) await this.cancelPreparationBySetup(association.setupId, reason);
-    if (association.sessionId) await this.interruptSession(association.sessionId, reason);
+    if (association.setupId) {
+      const runtime = await this.loadPreparation(association.setupId);
+      if (runtime && deviceFamilyForMode(runtime.mode) === family)
+        await this.cancelPreparationBySetup(association.setupId, reason);
+    }
+    if (association.sessionId) {
+      const runtime = await this.loadSession(association.sessionId);
+      if (runtime && deviceFamilyForMode(runtime.mode) === family)
+        await this.interruptSession(association.sessionId, reason);
+    }
   }
 
   private async maybeBeginCountdown(runtime: SessionRuntime): Promise<void> {
@@ -1168,7 +1272,17 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     await this.publishPreparation(runtime);
   }
 
-  private async handleSessionInput(
+  private handleSessionInput(
+    sessionId: string,
+    input: { kind: 'FSR'; raw: number } | { kind: 'BUTTON'; buttonCode: ButtonCode },
+    trusted: TrustedDeviceInput,
+  ): Promise<void> {
+    return this.runSessionMutation(sessionId, () =>
+      this.handleSessionInputUnlocked(sessionId, input, trusted),
+    );
+  }
+
+  private async handleSessionInputUnlocked(
     sessionId: string,
     input: { kind: 'FSR'; raw: number } | { kind: 'BUTTON'; buttonCode: ButtonCode },
     trusted: TrustedDeviceInput,
@@ -1221,15 +1335,18 @@ export class AuthoritativeRuntime implements RuntimeGateway {
 
   private async tick(): Promise<void> {
     const now = Date.now();
-    if (now >= this.#nextMode3LockRefreshMs) {
-      this.#nextMode3LockRefreshMs = now + MODE3_LOCK_REFRESH_MS;
-      const lock = await readMode3Lock(this.dependencies.redis);
-      const active =
-        lock?.state === 'HELD' &&
-        (lock.holderType === 'PREPARATION'
-          ? this.#activeSetups.has(lock.setupId)
-          : lock.sessionId !== null && this.#activeSessions.has(lock.sessionId));
-      if (lock && active) await refreshMode3Lock(this.dependencies.redis, lock.lockId);
+    if (now >= this.#nextDeviceLockRefreshMs) {
+      this.#nextDeviceLockRefreshMs = now + DEVICE_LOCK_REFRESH_MS;
+      for (const family of DEVICE_FAMILIES) {
+        const lock = await readDeviceLock(this.dependencies.redis, family);
+        const active =
+          lock?.state === 'HELD' &&
+          (lock.holderType === 'PREPARATION'
+            ? this.#activeSetups.has(lock.setupId)
+            : lock.sessionId !== null && this.#activeSessions.has(lock.sessionId));
+        if (lock && active)
+          await refreshDeviceLock(this.dependencies.redis, family, lock.lockId);
+      }
     }
     if (now >= this.#nextPreparationExpirySweepMs) {
       this.#nextPreparationExpirySweepMs = now + PREPARATION_EXPIRY_SWEEP_MS;
@@ -1271,47 +1388,51 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     }
     for (const sessionId of [...this.#activeSessions]) {
       if (this.#nextFinalizationAttempts.has(sessionId)) continue;
-      const runtime = await this.loadSession(sessionId);
-      if (!runtime) {
-        this.#activeSessions.delete(sessionId);
-        continue;
-      }
-      if (now >= (this.#nextPresenceChecks.get(sessionId) ?? 0)) {
-        this.#nextPresenceChecks.set(sessionId, now + COMPANION_PRESENCE_CHECK_MS);
-        await this.reconcileCompanionPresence(runtime, now);
-      }
-      if (runtime.status === 'BINDING') {
-        const session = await this.dependencies.prisma.trGameSession.findUnique({
-          where: { id: sessionId },
-          select: { bindingDeadlineAt: true },
-        });
-        if (session && session.bindingDeadlineAt.getTime() <= now)
-          await this.terminateSession(sessionId, 'ABORTED', 'BINDING_TIMEOUT');
-      } else if (
-        runtime.status === 'COUNTDOWN' &&
-        runtime.countdownEndsAtMs !== null &&
-        now >= runtime.countdownEndsAtMs
-      ) {
-        await this.startPlaying(runtime, now);
-      } else if (runtime.status === 'PLAYING' && runtime.engine) {
-        const transition =
-          runtime.engine.mode === 'MOTOR_GRIP'
-            ? tickMotorGrip(runtime.engine, now)
-            : runtime.engine.mode === 'GO_NO_GO'
-              ? tickGoNoGo(runtime.engine, now)
-              : tickSequenceMemory(runtime.engine, now);
-        runtime.engine = transition.state;
-        await this.syncSequenceCue(runtime);
-        await this.saveSession(runtime);
-        await this.publishSession(runtime, 'Permainan berlangsung.');
-        if (transition.completed)
-          await this.finalizeSession(
-            runtime,
-            transition.completed.score,
-            transition.completed.metrics,
-            transition.completed.trials,
-          );
-      }
+      await this.runSessionMutation(sessionId, () => this.tickSession(sessionId, now));
+    }
+  }
+
+  private async tickSession(sessionId: string, now: number): Promise<void> {
+    const runtime = await this.loadSession(sessionId);
+    if (!runtime) {
+      this.#activeSessions.delete(sessionId);
+      return;
+    }
+    if (now >= (this.#nextPresenceChecks.get(sessionId) ?? 0)) {
+      this.#nextPresenceChecks.set(sessionId, now + COMPANION_PRESENCE_CHECK_MS);
+      await this.reconcileCompanionPresence(runtime, now);
+    }
+    if (runtime.status === 'BINDING') {
+      const session = await this.dependencies.prisma.trGameSession.findUnique({
+        where: { id: sessionId },
+        select: { bindingDeadlineAt: true },
+      });
+      if (session && session.bindingDeadlineAt.getTime() <= now)
+        await this.terminateSession(sessionId, 'ABORTED', 'BINDING_TIMEOUT');
+    } else if (
+      runtime.status === 'COUNTDOWN' &&
+      runtime.countdownEndsAtMs !== null &&
+      now >= runtime.countdownEndsAtMs
+    ) {
+      await this.startPlaying(runtime, now);
+    } else if (runtime.status === 'PLAYING' && runtime.engine) {
+      const transition =
+        runtime.engine.mode === 'MOTOR_GRIP'
+          ? tickMotorGrip(runtime.engine, now)
+          : runtime.engine.mode === 'GO_NO_GO'
+            ? tickGoNoGo(runtime.engine, now)
+            : tickSequenceMemory(runtime.engine, now);
+      runtime.engine = transition.state;
+      await this.syncSequenceCue(runtime);
+      await this.saveSession(runtime);
+      await this.publishSession(runtime, 'Permainan berlangsung.');
+      if (transition.completed)
+        await this.finalizeSession(
+          runtime,
+          transition.completed.score,
+          transition.completed.metrics,
+          transition.completed.trials,
+        );
     }
   }
 
@@ -1321,9 +1442,10 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     if (!cue) return;
     const cueKey = `${runtime.engine.phaseStartedAtMs}:${cue.index}`;
     if (runtime.lastSequenceCueKey === cueKey) return;
+    const durationMs = Math.min(1_000, cue.endsAtMs - Date.now());
+    if (durationMs <= 0) return;
     runtime.lastSequenceCueKey = cueKey;
-    const durationMs = Math.min(1_000, runtime.engine.config.exampleItemMs);
-    await enqueueMode3Command(this.dependencies.redis, {
+    await enqueueDeviceCommand(this.dependencies.redis, 'MODE3', {
       lockId: runtime.lockId,
       associationId: runtime.sessionId,
       sessionId: runtime.sessionId,
@@ -1543,6 +1665,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         const payload = parsed.data;
         if (!session.result) {
           const completedAt = new Date(payload.completedAt);
+          const family = deviceFamilyForMode(session.mode);
           await tx.trGameResult.create({
             data: {
               sessionId: session.id,
@@ -1557,8 +1680,9 @@ export class AuthoritativeRuntime implements RuntimeGateway {
                 ? {}
                 : { calibrationContext: toInputJson(session.calibrationSnapshot) }),
               deviceSnapshot: toInputJson({
-                deviceId: MODE3_DEVICE_ID,
-                label: deviceLabelForCapabilities(session.capabilitySnapshot),
+                deviceId: deviceIdForFamily(family),
+                family,
+                label: deviceLabelForFamily(family),
                 firmware: session.firmwareSnapshot,
                 capabilities: session.capabilitySnapshot,
               }),
@@ -1712,28 +1836,36 @@ export class AuthoritativeRuntime implements RuntimeGateway {
 
   private async requestPreparationCleanup(setupId: string, reason: string): Promise<void> {
     const runtime = await this.loadPreparation(setupId);
-    const lock = await readMode3Lock(this.dependencies.redis);
+    if (!runtime) return;
+    const family = deviceFamilyForMode(runtime.mode);
+    const lock = await readDeviceLock(this.dependencies.redis, family);
     if (!runtime || !lock || lock.lockId !== runtime.lockId || lock.setupId !== setupId) return;
-    const association = await readMode3Association(this.dependencies.redis, 'SETUP', setupId);
+    const association = await readDeviceAssociation(
+      this.dependencies.redis,
+      family,
+      'SETUP',
+      setupId,
+    );
     if (!association) {
-      await clearMode3Ownership(this.dependencies.redis, lock.lockId);
+      await clearDeviceOwnership(this.dependencies.redis, family, lock.lockId);
       return;
     }
     if (association.state === 'UNBINDING') return;
-    const releasing = await transitionMode3Lock(this.dependencies.redis, lock, {
+    const releasing = await transitionDeviceLock(this.dependencies.redis, family, lock, {
       holderType: lock.holderType,
       sessionId: lock.sessionId,
       state: 'RELEASING',
     });
     if (!releasing) return;
-    await updateMode3AssociationState(
+    await updateDeviceAssociationState(
       this.dependencies.redis,
+      family,
       'SETUP',
       setupId,
       releasing.lockId,
       'UNBINDING',
     );
-    await enqueueMode3Command(this.dependencies.redis, {
+    await enqueueDeviceCommand(this.dependencies.redis, family, {
       lockId: releasing.lockId,
       associationId: setupId,
       kind: 'SETUP_UNBIND',
@@ -1744,33 +1876,42 @@ export class AuthoritativeRuntime implements RuntimeGateway {
 
   private async requestSessionCleanup(sessionId: string): Promise<void> {
     const runtime = await this.loadSession(sessionId);
-    const lock = await readMode3Lock(this.dependencies.redis);
+    if (!runtime) return;
+    const family = deviceFamilyForMode(runtime.mode);
+    const lock = await readDeviceLock(this.dependencies.redis, family);
     if (!runtime || !lock || lock.lockId !== runtime.lockId || lock.sessionId !== sessionId) return;
-    const association = await readMode3Association(this.dependencies.redis, 'SESSION', sessionId);
+    const association = await readDeviceAssociation(
+      this.dependencies.redis,
+      family,
+      'SESSION',
+      sessionId,
+    );
     if (!association) {
-      const setupAssociation = await readMode3Association(
+      const setupAssociation = await readDeviceAssociation(
         this.dependencies.redis,
+        family,
         'SETUP',
         lock.setupId,
       );
-      if (!setupAssociation) await clearMode3Ownership(this.dependencies.redis, lock.lockId);
+      if (!setupAssociation) await clearDeviceOwnership(this.dependencies.redis, family, lock.lockId);
       return;
     }
     if (association.state === 'UNBINDING') return;
-    const releasing = await transitionMode3Lock(this.dependencies.redis, lock, {
+    const releasing = await transitionDeviceLock(this.dependencies.redis, family, lock, {
       holderType: 'SESSION',
       sessionId,
       state: 'RELEASING',
     });
     if (!releasing) return;
-    await updateMode3AssociationState(
+    await updateDeviceAssociationState(
       this.dependencies.redis,
+      family,
       'SESSION',
       sessionId,
       releasing.lockId,
       'UNBINDING',
     );
-    await enqueueMode3Command(this.dependencies.redis, {
+    await enqueueDeviceCommand(this.dependencies.redis, family, {
       lockId: releasing.lockId,
       associationId: sessionId,
       sessionId,
@@ -1778,7 +1919,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       payload: { action: 'HARD_STOP', expiresAfterMs: 1 },
       expiresAt: new Date(Date.now() + 1_000),
     });
-    await enqueueMode3Command(this.dependencies.redis, {
+    await enqueueDeviceCommand(this.dependencies.redis, family, {
       lockId: releasing.lockId,
       associationId: sessionId,
       sessionId,

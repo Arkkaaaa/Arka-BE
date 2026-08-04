@@ -2,6 +2,8 @@ import { z } from 'zod';
 
 export const GameModeSchema = z.enum(['MOTOR_GRIP', 'GO_NO_GO', 'SEQUENCE_MEMORY']);
 export type GameMode = z.infer<typeof GameModeSchema>;
+export const DeviceFamilySchema = z.enum(['GAME12', 'MODE3']);
+export type DeviceFamily = z.infer<typeof DeviceFamilySchema>;
 export const FruitVariantSchema = z.enum([
   'STRAWBERRY',
   'TOMATO',

@@ -142,6 +142,7 @@ interface ClaimedSummary {
 }
 
 class LeaseLostError extends Error {}
+class AiProviderHttpError extends Error {}
 
 export interface AiSummaryWorkerDependencies {
   readonly prisma: PrismaClient;
@@ -330,18 +331,19 @@ export class AiSummaryWorker {
       });
     } catch (error) {
       if (this.#stopping || error instanceof LeaseLostError) return;
-      this.dependencies.logger.warn(
-        {
-          summaryId: summary.id,
-          attemptCount: summary.attemptCount,
-          provider: this.dependencies.env.OLLAMA_PROVIDER,
-          model: this.dependencies.env.OLLAMA_MODEL,
-          timeoutMs: this.dependencies.env.OLLAMA_TIMEOUT_MS,
-          errorName: error instanceof Error ? error.name : 'UnknownError',
-          timedOut: error instanceof Error && error.name === 'AbortError',
-        },
-        'Pembuatan ringkasan AI gagal',
-      );
+      if (!(error instanceof AiProviderHttpError))
+        this.dependencies.logger.warn(
+          {
+            summaryId: summary.id,
+            attemptCount: summary.attemptCount,
+            provider: this.dependencies.env.OLLAMA_PROVIDER,
+            model: this.dependencies.env.OLLAMA_MODEL,
+            timeoutMs: this.dependencies.env.OLLAMA_TIMEOUT_MS,
+            errorName: error instanceof Error ? error.name : 'UnknownError',
+            timedOut: error instanceof Error && error.name === 'AbortError',
+          },
+          'Pembuatan ringkasan AI gagal',
+        );
       await this.completeFailure(
         summary,
         error instanceof SyntaxError || error instanceof z.ZodError
@@ -474,7 +476,17 @@ export class AiSummaryWorker {
           ),
         },
       );
-      if (!response.ok) throw new Error('AI summary request failed');
+      if (!response.ok) {
+        this.dependencies.logger.warn(
+          {
+            status: response.status,
+            provider: env.OLLAMA_PROVIDER,
+            model: env.OLLAMA_MODEL,
+          },
+          'AI provider HTTP request gagal',
+        );
+        throw new AiProviderHttpError('AI summary request failed');
+      }
 
       const responseBody: unknown = await response.json();
       const content = openAiCompatible

@@ -354,6 +354,8 @@ export const arkaOpenApi = {
       get: {
         tags: ['Devices'],
         summary: 'List institution devices',
+        description:
+          'Returns the GAME12 virtual device game12-primary (Arka Genggam) and MODE3 virtual device mode3-primary (Arka Ding Dong Dong), each with independent readiness.',
         operationId: 'listDevices',
         security,
         responses: {
@@ -831,6 +833,7 @@ export const arkaOpenApi = {
         type: 'object',
         required: [
           'deviceId',
+          'family',
           'label',
           'inventoryStatus',
           'connectionStatus',
@@ -843,6 +846,7 @@ export const arkaOpenApi = {
         ],
         properties: {
           deviceId: { type: 'string', minLength: 3, maxLength: 80 },
+          family: { type: 'string', enum: ['GAME12', 'MODE3'] },
           label: { type: 'string', minLength: 1, maxLength: 100 },
           inventoryStatus: { type: 'string', enum: ['ACTIVE', 'RETIRED', 'REVOKED'] },
           connectionStatus: {
@@ -873,14 +877,15 @@ export const arkaOpenApi = {
           lastSeenAt: { oneOf: [ref('IsoDate'), { type: 'null' }] },
         },
         example: {
-          deviceId: 'arka-device-001',
-          label: 'Perangkat Ruang A',
+          deviceId: 'game12-primary',
+          family: 'GAME12',
+          label: 'Arka Genggam',
           inventoryStatus: 'ACTIVE',
           connectionStatus: 'ONLINE',
           readinessCode: 'READY',
           readinessMessage: 'Perangkat siap digunakan.',
-          firmwareVersion: '0.1.0',
-          capabilities: ['FSR', 'BUTTONS_4', 'LED', 'HAPTIC'],
+          firmwareVersion: '0.2.3',
+          capabilities: ['FSR', 'LED', 'HAPTIC'],
           batteryPercent: 82,
           lastSeenAt: timestamp,
         },
@@ -1056,9 +1061,10 @@ export const arkaOpenApi = {
           expiresAt: ref('IsoDate'),
           device: {
             type: 'object',
-            required: ['deviceId', 'label', 'readinessCode'],
+            required: ['deviceId', 'family', 'label', 'readinessCode'],
             properties: {
               deviceId: { type: 'string' },
+              family: { type: 'string', enum: ['GAME12', 'MODE3'] },
               label: { type: 'string' },
               readinessCode: { type: 'string' },
             },
@@ -1554,19 +1560,13 @@ export const arkaOpenApi = {
       },
       DeviceMessageBase: {
         type: 'object',
-        required: ['protocolVersion', 'type', 'messageId', 'sentAtMs', 'sequence', 'deviceId'],
+        required: ['protocolVersion', 'type', 'messageId', 'sentAtMs', 'sequence'],
         properties: {
           protocolVersion: { type: 'integer', const: 1 },
           type: { type: 'string' },
           messageId: { type: 'string', format: 'uuid' },
           sentAtMs: { type: 'integer', minimum: 0 },
           sequence: { type: 'integer', minimum: 0 },
-          deviceId: {
-            type: 'string',
-            minLength: 1,
-            maxLength: 80,
-            pattern: '^[A-Za-z0-9._:-]+$',
-          },
         },
       },
       DeviceHello: {
@@ -1574,11 +1574,10 @@ export const arkaOpenApi = {
           ref('DeviceMessageBase'),
           {
             type: 'object',
-            required: ['institutionId', 'bootId', 'payload'],
+            required: ['bootId', 'payload'],
             properties: {
               type: { type: 'string', const: 'device.hello' },
               sequence: { type: 'integer', const: 0 },
-              institutionId: { type: 'string', format: 'uuid' },
               bootId: { type: 'string', format: 'uuid' },
               payload: {
                 type: 'object',

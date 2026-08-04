@@ -1,9 +1,13 @@
 import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Redis } from 'ioredis';
+import { redisPrefixForFamily, type DeviceFamily } from './family.js';
 import { DEVICE_SUBPROTOCOL, type DeviceHello, type DeviceProve } from './protocol.js';
 
 const CHALLENGE_TTL_SECONDS = 15;
-const CHALLENGE_PREFIX = 'arka:{mode3}:challenge:';
+
+function challengeKey(family: DeviceFamily, challengeId: string): string {
+  return `${redisPrefixForFamily(family)}:challenge:${challengeId}`;
+}
 
 export interface DeviceChallengeRecord {
   readonly challengeId: string;
@@ -13,6 +17,7 @@ export interface DeviceChallengeRecord {
 
 export async function issueDeviceChallenge(
   redis: Redis,
+  family: DeviceFamily,
   hello: DeviceHello,
   nowMs = Date.now(),
 ): Promise<DeviceChallengeRecord> {
@@ -27,7 +32,7 @@ export async function issueDeviceChallenge(
     expiresAtMs: record.expiresAtMs,
   });
   const accepted = await redis.set(
-    `${CHALLENGE_PREFIX}${record.challengeId}`,
+    challengeKey(family, record.challengeId),
     stored,
     'EX',
     CHALLENGE_TTL_SECONDS,
@@ -39,13 +44,13 @@ export async function issueDeviceChallenge(
 
 export async function verifyDeviceProof(
   redis: Redis,
+  family: DeviceFamily,
   prove: DeviceProve,
   hello: DeviceHello,
   secret: Buffer,
   nowMs = Date.now(),
 ): Promise<boolean> {
-  const key = `${CHALLENGE_PREFIX}${prove.payload.challengeId}`;
-  const encoded = await redis.call('GETDEL', key);
+  const encoded = await redis.call('GETDEL', challengeKey(family, prove.payload.challengeId));
   if (typeof encoded !== 'string') return false;
   let record: { bootId: string; nonce: string; expiresAtMs: number };
   try {

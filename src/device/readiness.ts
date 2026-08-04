@@ -1,5 +1,6 @@
 import type { Redis } from 'ioredis';
 import { z } from 'zod';
+import { redisPrefixForFamily, type DeviceFamily } from './family.js';
 
 const SUPPORTED_DEVICE_FIRMWARE: Readonly<Record<string, true>> = {
   '0.2.0': true,
@@ -8,16 +9,22 @@ const SUPPORTED_DEVICE_FIRMWARE: Readonly<Record<string, true>> = {
   '0.2.3': true,
 };
 
+export const GAME12_DEVICE_ID = 'game12-primary';
+export const GAME12_DEVICE_LABEL = 'Arka Genggam';
 export const MODE3_DEVICE_ID = 'mode3-primary';
 export const MODE3_DEVICE_LABEL = 'Arka Ding Dong Dong';
-export const FSR_DEVICE_LABEL = 'Arka Genggam';
 
-export function deviceLabelForCapabilities(capabilities: unknown): string {
-  return Array.isArray(capabilities) && capabilities.includes('FSR_10HZ')
-    ? FSR_DEVICE_LABEL
-    : MODE3_DEVICE_LABEL;
+export function deviceIdForFamily(family: DeviceFamily): string {
+  return family === 'GAME12' ? GAME12_DEVICE_ID : MODE3_DEVICE_ID;
 }
-export const MODE3_READINESS_KEY = 'arka:{mode3}:readiness';
+
+export function deviceLabelForFamily(family: DeviceFamily): string {
+  return family === 'GAME12' ? GAME12_DEVICE_LABEL : MODE3_DEVICE_LABEL;
+}
+
+export function deviceReadinessKey(family: DeviceFamily): string {
+  return `${redisPrefixForFamily(family)}:readiness`;
+}
 
 export function isDeviceFirmwareCompatible(firmwareVersion: string): boolean {
   return SUPPORTED_DEVICE_FIRMWARE[firmwareVersion] === true;
@@ -85,7 +92,7 @@ export type DeviceReadiness = z.infer<typeof DeviceReadinessSchema>;
 
 export const DEVICE_READINESS_TTL_SECONDS = 15;
 
-export function offlineMode3Readiness(): DeviceReadiness {
+export function offlineDeviceReadiness(): DeviceReadiness {
   return {
     connectionStatus: 'OFFLINE',
     readinessCode: 'OFFLINE',
@@ -100,29 +107,33 @@ export function offlineMode3Readiness(): DeviceReadiness {
 
 export async function writeDeviceReadiness(
   redis: Redis,
+  family: DeviceFamily,
   readiness: DeviceReadiness,
 ): Promise<void> {
   const value = DeviceReadinessSchema.parse(readiness);
   await redis.set(
-    MODE3_READINESS_KEY,
+    deviceReadinessKey(family),
     JSON.stringify(value),
     'EX',
     DEVICE_READINESS_TTL_SECONDS,
   );
 }
 
-export async function readDeviceReadiness(redis: Redis): Promise<DeviceReadiness> {
+export async function readDeviceReadiness(
+  redis: Redis,
+  family: DeviceFamily,
+): Promise<DeviceReadiness> {
   let stored: string | null;
   try {
-    stored = await redis.get(MODE3_READINESS_KEY);
+    stored = await redis.get(deviceReadinessKey(family));
   } catch {
-    return offlineMode3Readiness();
+    return offlineDeviceReadiness();
   }
-  if (!stored) return offlineMode3Readiness();
+  if (!stored) return offlineDeviceReadiness();
   try {
     const parsed: unknown = JSON.parse(stored);
     return DeviceReadinessSchema.parse(parsed);
   } catch {
-    return offlineMode3Readiness();
+    return offlineDeviceReadiness();
   }
 }

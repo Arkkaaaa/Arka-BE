@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   DeviceConnectionStatusSchema,
+  DeviceFamilySchema,
   DeviceInventoryStatusSchema,
   DeviceReadinessCodeSchema,
   DateOnlySchema,
@@ -182,6 +183,7 @@ export const UpdateParticipantRequestSchema = z
 
 export const DeviceDtoSchema = z.object({
   deviceId: z.string().min(3).max(80),
+  family: DeviceFamilySchema,
   label: z.string().min(1).max(100),
   inventoryStatus: DeviceInventoryStatusSchema,
   connectionStatus: DeviceConnectionStatusSchema,
@@ -303,7 +305,7 @@ export const PreparationDtoSchema = z.object({
   fruitVariant: FruitVariantSchema.optional(),
   state: PreparationStateSchema,
   expiresAt: IsoDateSchema,
-  device: DeviceDtoSchema.pick({ deviceId: true, label: true, readinessCode: true }),
+  device: DeviceDtoSchema.pick({ deviceId: true, family: true, label: true, readinessCode: true }),
   setupBound: z.boolean(),
   calibration: z
     .object({

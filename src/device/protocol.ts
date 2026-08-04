@@ -54,7 +54,11 @@ export const DeviceHelloSchema = ClientBase.extend({
   payload: z
     .object({
       firmwareVersion: z.string().min(1).max(80),
-      capabilities: z.array(Capability).max(16),
+      capabilities: z
+        .array(Capability)
+        .min(1)
+        .max(5)
+        .refine((values) => new Set(values).size === values.length),
     })
     .strict(),
 }).strict();

@@ -1,14 +1,16 @@
 import type { RedisClient } from '../../db/redis.js';
-import { readMode3Lock } from '../../device/commands.js';
+import { readDeviceLock } from '../../device/commands.js';
+import { DEVICE_FAMILIES, type DeviceFamily } from '../../device/family.js';
 import {
-  MODE3_DEVICE_ID,
-  deviceLabelForCapabilities,
+  deviceIdForFamily,
+  deviceLabelForFamily,
   readDeviceReadiness,
   type DeviceReadiness,
 } from '../../device/readiness.js';
 
 export interface DeviceRecord {
   readonly deviceId: string;
+  readonly family: DeviceFamily;
   readonly label: string;
   readonly inventoryStatus: 'ACTIVE';
   readonly firmwareVersion: string | null;
@@ -25,22 +27,25 @@ export class DeviceRepository {
   constructor(private readonly redis: RedisClient) {}
 
   async listInstitutionDevices(_institutionId: string): Promise<DeviceSnapshot[]> {
+    return Promise.all(DEVICE_FAMILIES.map((family) => this.readFamilySnapshot(family)));
+  }
+
+  private async readFamilySnapshot(family: DeviceFamily): Promise<DeviceSnapshot> {
     const [readiness, lock] = await Promise.all([
-      readDeviceReadiness(this.redis),
-      readMode3Lock(this.redis),
+      readDeviceReadiness(this.redis, family),
+      readDeviceLock(this.redis, family),
     ]);
-    return [
-      {
-        device: {
-          deviceId: MODE3_DEVICE_ID,
-          label: deviceLabelForCapabilities(readiness.capabilities),
-          inventoryStatus: 'ACTIVE',
-          firmwareVersion: readiness.firmwareVersion,
-          capabilitySnapshot: readiness.capabilities,
-          reservation: lock ? { state: lock.state } : null,
-        },
-        readiness,
+    return {
+      device: {
+        deviceId: deviceIdForFamily(family),
+        family,
+        label: deviceLabelForFamily(family),
+        inventoryStatus: 'ACTIVE',
+        firmwareVersion: readiness.firmwareVersion,
+        capabilitySnapshot: readiness.capabilities,
+        reservation: lock ? { state: lock.state } : null,
       },
-    ];
+      readiness,
+    };
   }
 }

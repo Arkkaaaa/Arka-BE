@@ -16,6 +16,7 @@ const APP_MAX_MESSAGES_PER_SECOND = 20;
 const APP_PING_INTERVAL_MS = 5_000;
 const APP_STALE_AFTER_MS = 15_000;
 const APP_CONNECTION_TTL_SECONDS = 20;
+const AUTHORIZATION_CACHE_MS = 5_000;
 const ACQUIRE_APP_CONNECTION_SCRIPT = `
 redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', ARGV[1])
 if redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[2]) then return 0 end
@@ -51,7 +52,9 @@ interface Subscription {
   readonly id: string;
   lastSequence: number;
   replaying: boolean;
-  buffered: AppServerMessage[];
+  buffered: AppServerMessage | null;
+  pending: AppServerMessage | null;
+  sending: boolean;
   unsubscribe: () => void;
 }
 
@@ -208,6 +211,7 @@ export class AppRealtimeGateway {
     let outbound = Promise.resolve();
     let closed = false;
     let lastPongAtMs = Date.now();
+    let authorizedUntilMs = 0;
     let cleanupPromise: Promise<void> | null = null;
 
     const leaveSession = async (
@@ -221,13 +225,16 @@ export class AppRealtimeGateway {
       }
     };
 
-    const stillAuthorized = async (): Promise<boolean> => {
+    const stillAuthorized = async (force = false): Promise<boolean> => {
+      const now = Date.now();
+      if (!force && now < authorizedUntilMs) return true;
       const current = await authenticate(request, this.dependencies);
-      return (
+      const authorized =
         current?.session.id === auth.session.id &&
         current.user.id === auth.user.id &&
-        current.user.institutionId === auth.user.institutionId
-      );
+        current.user.institutionId === auth.user.institutionId;
+      authorizedUntilMs = authorized ? now + AUTHORIZATION_CACHE_MS : 0;
+      return authorized;
     };
 
     const beginClose = (): void => {
@@ -288,7 +295,7 @@ export class AppRealtimeGateway {
       processing = processing
         .then(async () => {
           if (closed) return;
-          if (!(await stillAuthorized())) {
+          if (!(await stillAuthorized(true))) {
             revokeConnection();
             return;
           }
@@ -446,24 +453,27 @@ export class AppRealtimeGateway {
             id,
             lastSequence: parsed.data.payload.cursor ?? 0,
             replaying: true,
-            buffered: [],
+            buffered: null,
+            pending: null,
+            sending: false,
             unsubscribe: () => undefined,
           };
-          const deliver = (message: AppServerMessage): void => {
-            if (message.sequence <= subscription.lastSequence) return;
-            if (subscription.replaying) {
-              subscription.buffered.push(message);
-              return;
-            }
+          const flush = (): void => {
+            if (subscription.sending || closed) return;
+            subscription.sending = true;
             outbound = outbound
               .then(async () => {
-                if (closed || message.sequence <= subscription.lastSequence) return;
-                if (!(await stillAuthorized())) {
-                  revokeConnection();
-                  return;
+                while (subscription.pending && !closed) {
+                  const message = subscription.pending;
+                  subscription.pending = null;
+                  if (message.sequence <= subscription.lastSequence) continue;
+                  if (!(await stillAuthorized())) {
+                    revokeConnection();
+                    return;
+                  }
+                  subscription.lastSequence = message.sequence;
+                  sendValidated(socket, message);
                 }
-                subscription.lastSequence = message.sequence;
-                sendValidated(socket, message);
               })
               .catch((error) => {
                 this.dependencies.logger.warn(
@@ -472,7 +482,22 @@ export class AppRealtimeGateway {
                 );
                 beginClose();
                 socket.terminate();
+              })
+              .finally(() => {
+                subscription.sending = false;
+                if (subscription.pending) flush();
               });
+          };
+          const deliver = (message: AppServerMessage): void => {
+            if (message.sequence <= subscription.lastSequence) return;
+            if (subscription.replaying) {
+              if (!subscription.buffered || message.sequence > subscription.buffered.sequence)
+                subscription.buffered = message;
+              return;
+            }
+            if (!subscription.pending || message.sequence > subscription.pending.sequence)
+              subscription.pending = message;
+            flush();
           };
           subscription.unsubscribe = this.runtime.events.subscribe(scope, id, deliver);
           subscriptions.set(key, subscription);
@@ -482,12 +507,11 @@ export class AppRealtimeGateway {
             await leaveSession(subscription, false);
             return;
           }
-          const ordered = [...replay, ...subscription.buffered].sort(
-            (left, right) => left.sequence - right.sequence,
-          );
-          subscription.buffered = [];
+          const latest = [...replay, ...(subscription.buffered ? [subscription.buffered] : [])]
+            .sort((left, right) => right.sequence - left.sequence)[0];
+          subscription.buffered = null;
           subscription.replaying = false;
-          for (const message of ordered) deliver(message);
+          if (latest) deliver(latest);
 
           if (scope === 'session') {
             const arrived = await this.runtime.companionArrived(id, auth.session.id, connectionId);

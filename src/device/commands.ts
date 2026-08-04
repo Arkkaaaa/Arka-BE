@@ -1,15 +1,23 @@
 import { randomUUID } from 'node:crypto';
 import type { Redis } from 'ioredis';
 import { z } from 'zod';
+import { redisPrefixForFamily, type DeviceFamily } from './family.js';
 import { DeviceFeedbackActionSchema, type DeviceServerMessage } from './protocol.js';
-
-const PREFIX = 'arka:{mode3}';
-const LOCK_KEY = `${PREFIX}:lock`;
-const COMMAND_QUEUE_KEY = `${PREFIX}:commands`;
-const COMMAND_SEQUENCE_KEY = `${PREFIX}:command-sequence`;
 const LOCK_TTL_SECONDS = 30;
 const STATE_TTL_SECONDS = 3_600;
 const COMMAND_ACK_TIMEOUT_MS = 5_000;
+
+function lockKey(family: DeviceFamily): string {
+  return `${redisPrefixForFamily(family)}:lock`;
+}
+
+function commandQueueKey(family: DeviceFamily): string {
+  return `${redisPrefixForFamily(family)}:commands`;
+}
+
+function commandSequenceKey(family: DeviceFamily): string {
+  return `${redisPrefixForFamily(family)}:command-sequence`;
+}
 
 const LockSchema = z
   .object({
@@ -52,10 +60,10 @@ const CommandSchema = z
   })
   .strict();
 
-export type Mode3Lock = z.infer<typeof LockSchema>;
-export type Mode3Association = z.infer<typeof AssociationSchema>;
-export type Mode3Command = z.infer<typeof CommandSchema>;
-export type Mode3CommandKind = Mode3Command['kind'];
+export type DeviceLock = z.infer<typeof LockSchema>;
+export type DeviceAssociation = z.infer<typeof AssociationSchema>;
+export type DeviceCommand = z.infer<typeof CommandSchema>;
+export type DeviceCommandKind = DeviceCommand['kind'];
 
 const REFRESH_LOCK_SCRIPT = `
 local encoded = redis.call('GET', KEYS[1])
@@ -98,12 +106,16 @@ redis.call('EXPIRE', KEYS[3], ARGV[2])
 return encoded
 `;
 
-function associationKey(type: Mode3Association['type'], associationId: string): string {
-  return `${PREFIX}:association:${type.toLowerCase()}:${associationId}`;
+function associationKey(
+  family: DeviceFamily,
+  type: DeviceAssociation['type'],
+  associationId: string,
+): string {
+  return `${redisPrefixForFamily(family)}:association:${type.toLowerCase()}:${associationId}`;
 }
 
-function commandKey(commandId: string): string {
-  return `${PREFIX}:command:${commandId}`;
+function commandKey(family: DeviceFamily, commandId: string): string {
+  return `${redisPrefixForFamily(family)}:command:${commandId}`;
 }
 
 function decode<T>(encoded: string | null, schema: z.ZodType<T>): T | null {
@@ -115,14 +127,18 @@ function decode<T>(encoded: string | null, schema: z.ZodType<T>): T | null {
   }
 }
 
-export async function readMode3Lock(redis: Redis): Promise<Mode3Lock | null> {
-  return decode(await redis.get(LOCK_KEY), LockSchema);
+export async function readDeviceLock(
+  redis: Redis,
+  family: DeviceFamily,
+): Promise<DeviceLock | null> {
+  return decode(await redis.get(lockKey(family)), LockSchema);
 }
 
-export async function acquireMode3Lock(
+export async function acquireDeviceLock(
   redis: Redis,
-  input: Omit<Mode3Lock, 'lockId' | 'state' | 'expiresAtMs' | 'sessionId'>,
-): Promise<Mode3Lock | null> {
+  family: DeviceFamily,
+  input: Omit<DeviceLock, 'lockId' | 'state' | 'expiresAtMs' | 'sessionId'>,
+): Promise<DeviceLock | null> {
   const lock = LockSchema.parse({
     ...input,
     lockId: randomUUID(),
@@ -130,15 +146,25 @@ export async function acquireMode3Lock(
     state: 'HELD',
     expiresAtMs: Date.now() + LOCK_TTL_SECONDS * 1_000,
   });
-  const acquired = await redis.set(LOCK_KEY, JSON.stringify(lock), 'EX', LOCK_TTL_SECONDS, 'NX');
+  const acquired = await redis.set(
+    lockKey(family),
+    JSON.stringify(lock),
+    'EX',
+    LOCK_TTL_SECONDS,
+    'NX',
+  );
   return acquired === 'OK' ? lock : null;
 }
 
-export async function refreshMode3Lock(redis: Redis, lockId: string): Promise<boolean> {
+export async function refreshDeviceLock(
+  redis: Redis,
+  family: DeviceFamily,
+  lockId: string,
+): Promise<boolean> {
   const refreshed = await redis.eval(
     REFRESH_LOCK_SCRIPT,
     1,
-    LOCK_KEY,
+    lockKey(family),
     lockId,
     String(Date.now() + LOCK_TTL_SECONDS * 1_000),
     String(LOCK_TTL_SECONDS),
@@ -146,11 +172,12 @@ export async function refreshMode3Lock(redis: Redis, lockId: string): Promise<bo
   return Number(refreshed) === 1;
 }
 
-export async function transitionMode3Lock(
+export async function transitionDeviceLock(
   redis: Redis,
-  current: Mode3Lock,
-  next: Pick<Mode3Lock, 'holderType' | 'sessionId' | 'state'>,
-): Promise<Mode3Lock | null> {
+  family: DeviceFamily,
+  current: DeviceLock,
+  next: Pick<DeviceLock, 'holderType' | 'sessionId' | 'state'>,
+): Promise<DeviceLock | null> {
   const transitioned = LockSchema.parse({
     ...current,
     ...next,
@@ -162,7 +189,7 @@ export async function transitionMode3Lock(
   const changed = await redis.eval(
     TRANSITION_LOCK_SCRIPT,
     1,
-    LOCK_KEY,
+    lockKey(family),
     current.lockId,
     current.ownerSessionId,
     current.holderType,
@@ -173,66 +200,75 @@ export async function transitionMode3Lock(
   return Number(changed) === 1 ? transitioned : null;
 }
 
-export async function releaseMode3Lock(redis: Redis, lockId: string): Promise<boolean> {
-  const released = await redis.eval(RELEASE_LOCK_SCRIPT, 1, LOCK_KEY, lockId);
+export async function releaseDeviceLock(
+  redis: Redis,
+  family: DeviceFamily,
+  lockId: string,
+): Promise<boolean> {
+  const released = await redis.eval(RELEASE_LOCK_SCRIPT, 1, lockKey(family), lockId);
   return Number(released) === 1;
 }
 
-export async function writeMode3Association(
+export async function writeDeviceAssociation(
   redis: Redis,
-  association: Mode3Association,
+  family: DeviceFamily,
+  association: DeviceAssociation,
 ): Promise<void> {
   const parsed = AssociationSchema.parse(association);
   await redis.set(
-    associationKey(parsed.type, parsed.associationId),
+    associationKey(family, parsed.type, parsed.associationId),
     JSON.stringify(parsed),
     'EX',
     STATE_TTL_SECONDS,
   );
 }
 
-export async function readMode3Association(
+export async function readDeviceAssociation(
   redis: Redis,
-  type: Mode3Association['type'],
+  family: DeviceFamily,
+  type: DeviceAssociation['type'],
   associationId: string,
-): Promise<Mode3Association | null> {
-  return decode(await redis.get(associationKey(type, associationId)), AssociationSchema);
+): Promise<DeviceAssociation | null> {
+  return decode(await redis.get(associationKey(family, type, associationId)), AssociationSchema);
 }
 
-export async function updateMode3AssociationState(
+export async function updateDeviceAssociationState(
   redis: Redis,
-  type: Mode3Association['type'],
+  family: DeviceFamily,
+  type: DeviceAssociation['type'],
   associationId: string,
   lockId: string,
-  state: Mode3Association['state'],
+  state: DeviceAssociation['state'],
 ): Promise<boolean> {
-  const association = await readMode3Association(redis, type, associationId);
+  const association = await readDeviceAssociation(redis, family, type, associationId);
   if (!association || association.lockId !== lockId) return false;
-  await writeMode3Association(redis, { ...association, state });
+  await writeDeviceAssociation(redis, family, { ...association, state });
   return true;
 }
 
-export async function deleteMode3Association(
+export async function deleteDeviceAssociation(
   redis: Redis,
-  type: Mode3Association['type'],
+  family: DeviceFamily,
+  type: DeviceAssociation['type'],
   associationId: string,
 ): Promise<void> {
-  await redis.del(associationKey(type, associationId));
+  await redis.del(associationKey(family, type, associationId));
 }
 
-export interface EnqueueMode3CommandInput {
+export interface EnqueueDeviceCommandInput {
   readonly lockId: string;
   readonly associationId: string;
   readonly sessionId?: string;
-  readonly kind: Mode3CommandKind;
+  readonly kind: DeviceCommandKind;
   readonly payload: unknown;
   readonly expiresAt: Date;
 }
 
-export async function enqueueMode3Command(
+export async function enqueueDeviceCommand(
   redis: Redis,
-  input: EnqueueMode3CommandInput,
-): Promise<Mode3Command> {
+  family: DeviceFamily,
+  input: EnqueueDeviceCommandInput,
+): Promise<DeviceCommand> {
   const command = CommandSchema.omit({ sequence: true }).parse({
     commandId: randomUUID(),
     lockId: input.lockId,
@@ -251,21 +287,25 @@ export async function enqueueMode3Command(
   const encoded = await redis.eval(
     ENQUEUE_COMMAND_SCRIPT,
     3,
-    COMMAND_SEQUENCE_KEY,
-    commandKey(command.commandId),
-    COMMAND_QUEUE_KEY,
+    commandSequenceKey(family),
+    commandKey(family, command.commandId),
+    commandQueueKey(family),
     JSON.stringify(command),
     String(Math.max(ttlSeconds, 60)),
   );
-  if (typeof encoded !== 'string') throw new Error('Perintah Mode 3 gagal disimpan');
+  if (typeof encoded !== 'string') throw new Error('Perintah perangkat gagal disimpan');
   return CommandSchema.parse(JSON.parse(encoded));
 }
 
-export async function listMode3Commands(redis: Redis, nowMs = Date.now()): Promise<Mode3Command[]> {
-  const ids = await redis.zrange(COMMAND_QUEUE_KEY, 0, 31);
+export async function listDeviceCommands(
+  redis: Redis,
+  family: DeviceFamily,
+  nowMs = Date.now(),
+): Promise<DeviceCommand[]> {
+  const ids = await redis.zrange(commandQueueKey(family), 0, 31);
   if (ids.length === 0) return [];
-  const encoded = await redis.mget(ids.map(commandKey));
-  const commands: Mode3Command[] = [];
+  const encoded = await redis.mget(ids.map((id) => commandKey(family, id)));
+  const commands: DeviceCommand[] = [];
   const expired: string[] = [];
   for (const [index, value] of encoded.entries()) {
     const command = decode(value, CommandSchema);
@@ -275,17 +315,18 @@ export async function listMode3Commands(redis: Redis, nowMs = Date.now()): Promi
       commands.push(command);
     }
   }
-  if (expired.length > 0) await redis.zrem(COMMAND_QUEUE_KEY, ...expired);
+  if (expired.length > 0) await redis.zrem(commandQueueKey(family), ...expired);
   return commands;
 }
 
-export async function markMode3CommandDispatched(
+export async function markDeviceCommandDispatched(
   redis: Redis,
-  command: Mode3Command,
+  family: DeviceFamily,
+  command: DeviceCommand,
   connectionId: string,
   bootId: string,
-): Promise<Mode3Command | null> {
-  const current = decode(await redis.get(commandKey(command.commandId)), CommandSchema);
+): Promise<DeviceCommand | null> {
+  const current = decode(await redis.get(commandKey(family, command.commandId)), CommandSchema);
   const now = Date.now();
   if (!current || current.expiresAtMs <= now || !['PENDING', 'SENT'].includes(current.status))
     return null;
@@ -299,24 +340,41 @@ export async function markMode3CommandDispatched(
     bootId,
     lastDispatchedAtMs: now,
   });
-  await redis.set(commandKey(updated.commandId), JSON.stringify(updated), 'EX', STATE_TTL_SECONDS);
+  await redis.set(commandKey(family, updated.commandId), JSON.stringify(updated), 'EX', STATE_TTL_SECONDS);
   return updated;
 }
 
-export async function acknowledgeMode3Command(
+export async function acknowledgeDeviceCommand(
   redis: Redis,
+  family: DeviceFamily,
   input: {
     readonly commandId: string;
     readonly associationId: string;
+    readonly associationType: DeviceAssociation['type'];
     readonly connectionId: string;
     readonly bootId: string;
     readonly outcome: 'ACK' | 'NACK';
     readonly reason?: string;
   },
-): Promise<{ command: Mode3Command; duplicate: boolean } | null> {
-  const command = decode(await redis.get(commandKey(input.commandId)), CommandSchema);
+): Promise<{ command: DeviceCommand; duplicate: boolean } | null> {
+  const command = decode(await redis.get(commandKey(family, input.commandId)), CommandSchema);
+  const expectedAssociationType =
+    command?.kind === 'SETUP_BIND' || command?.kind === 'SETUP_UNBIND' ? 'SETUP' : 'SESSION';
+  const [association, lock] = command
+    ? await Promise.all([
+        redis
+          .get(associationKey(family, input.associationType, input.associationId))
+          .then((value) => decode(value, AssociationSchema)),
+        readDeviceLock(redis, family),
+      ])
+    : [null, null];
   if (
     !command ||
+    !association ||
+    !lock ||
+    lock.lockId !== command.lockId ||
+    association.lockId !== command.lockId ||
+    expectedAssociationType !== input.associationType ||
     command.associationId !== input.associationId ||
     command.connectionId !== input.connectionId ||
     command.bootId !== input.bootId ||
@@ -338,13 +396,13 @@ export async function acknowledgeMode3Command(
   });
   await redis
     .multi()
-    .set(commandKey(updated.commandId), JSON.stringify(updated), 'EX', STATE_TTL_SECONDS)
-    .zrem(COMMAND_QUEUE_KEY, updated.commandId)
+    .set(commandKey(family, updated.commandId), JSON.stringify(updated), 'EX', STATE_TTL_SECONDS)
+    .zrem(commandQueueKey(family), updated.commandId)
     .exec();
   return { command: updated, duplicate: false };
 }
 
-export function commandToWire(command: Mode3Command, sentAtMs = Date.now()): DeviceServerMessage {
+export function commandToWire(command: DeviceCommand, sentAtMs = Date.now()): DeviceServerMessage {
   const base = {
     protocolVersion: 1 as const,
     messageId: randomUUID(),
@@ -391,21 +449,26 @@ export function commandToWire(command: Mode3Command, sentAtMs = Date.now()): Dev
   };
 }
 
-export async function clearMode3Ownership(redis: Redis, lockId?: string): Promise<boolean> {
-  const lock = await readMode3Lock(redis);
+export async function clearDeviceOwnership(
+  redis: Redis,
+  family: DeviceFamily,
+  lockId?: string,
+): Promise<boolean> {
+  const lock = await readDeviceLock(redis, family);
   if (lockId && lock && lock.lockId !== lockId) return false;
-  const commandIds = await redis.zrange(COMMAND_QUEUE_KEY, 0, -1);
+  const queueKey = commandQueueKey(family);
+  const commandIds = await redis.zrange(queueKey, 0, -1);
   const keys = [
-    COMMAND_QUEUE_KEY,
+    queueKey,
     ...(lock
       ? [
-          associationKey('SETUP', lock.setupId),
-          ...(lock.sessionId ? [associationKey('SESSION', lock.sessionId)] : []),
+          associationKey(family, 'SETUP', lock.setupId),
+          ...(lock.sessionId ? [associationKey(family, 'SESSION', lock.sessionId)] : []),
         ]
       : []),
-    ...commandIds.map(commandKey),
+    ...commandIds.map((commandId) => commandKey(family, commandId)),
   ];
   if (keys.length > 0) await redis.del(...keys);
-  if (lock) return releaseMode3Lock(redis, lock.lockId);
+  if (lock) return releaseDeviceLock(redis, family, lock.lockId);
   return true;
 }

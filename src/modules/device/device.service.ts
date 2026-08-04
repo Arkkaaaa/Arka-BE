@@ -43,6 +43,7 @@ export function mapDeviceSnapshot(snapshot: DeviceSnapshot): DeviceDto {
   const readinessCode = effectiveReadinessCode(snapshot);
   return DeviceDtoSchema.parse({
     deviceId: snapshot.device.deviceId,
+    family: snapshot.device.family,
     label: snapshot.device.label,
     inventoryStatus: snapshot.device.inventoryStatus,
     connectionStatus: snapshot.readiness.connectionStatus,
