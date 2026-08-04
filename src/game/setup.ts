@@ -1,4 +1,4 @@
-import { GO_NO_GO_STIMULI, type GoNoGoStimulus } from './go-no-go.js';
+import type { GoNoGoStimulus } from './go-no-go.js';
 
 export interface MotorCalibrationConfig {
   baselineMinimumSamples: number;
@@ -139,22 +139,6 @@ export interface PracticeTrial {
   readonly isTarget: boolean;
 }
 
-export function createGoNoGoPracticePlan(seed: number): readonly PracticeTrial[] {
-  let cursor = seed >>> 0 || 0x9e3779b9;
-  const kinds = [true, false, true, false];
-  for (let index = kinds.length - 1; index > 0; index -= 1) {
-    cursor ^= cursor << 13;
-    cursor ^= cursor >>> 17;
-    cursor ^= cursor << 5;
-    const target = (cursor >>> 0) % (index + 1);
-    [kinds[index], kinds[target]] = [kinds[target] as boolean, kinds[index] as boolean];
-  }
-  return kinds.map((isTarget, index) => {
-    if (isTarget) return { index, stimulus: 'WAYANG', isTarget };
-    cursor ^= cursor << 13;
-    cursor ^= cursor >>> 17;
-    cursor ^= cursor << 5;
-    const stimulus = GO_NO_GO_STIMULI[1 + ((cursor >>> 0) % 4)] as GoNoGoStimulus;
-    return { index, stimulus, isTarget };
-  });
+export function createGoNoGoPracticePlan(): readonly PracticeTrial[] {
+  return [{ index: 0, stimulus: 'WAYANG', isTarget: true }];
 }

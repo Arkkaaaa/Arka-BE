@@ -1157,7 +1157,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
           };
           runtime.calibrationState = null;
           runtime.state = 'PRACTICING';
-          runtime.practice = createGoNoGoPracticePlan(seedFromId(runtime.setupId));
+          runtime.practice = createGoNoGoPracticePlan();
           runtime.practiceDeadlineMs = input.receivedAtMs + COUNTDOWN_MS;
           runtime.edge = { pressed: false, armed: true };
           const updated = await this.dependencies.prisma.trGamePreparation.updateMany({
