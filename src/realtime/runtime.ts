@@ -1893,7 +1893,31 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         'SETUP',
         lock.setupId,
       );
-      if (!setupAssociation) await clearDeviceOwnership(this.dependencies.redis, family, lock.lockId);
+      if (!setupAssociation) {
+        await clearDeviceOwnership(this.dependencies.redis, family, lock.lockId);
+        return;
+      }
+      const releasing = await transitionDeviceLock(this.dependencies.redis, family, lock, {
+        holderType: 'SESSION',
+        sessionId,
+        state: 'RELEASING',
+      });
+      if (!releasing) return;
+      await updateDeviceAssociationState(
+        this.dependencies.redis,
+        family,
+        'SETUP',
+        lock.setupId,
+        releasing.lockId,
+        'UNBINDING',
+      );
+      await enqueueDeviceCommand(this.dependencies.redis, family, {
+        lockId: releasing.lockId,
+        associationId: lock.setupId,
+        kind: 'SETUP_UNBIND',
+        payload: {},
+        expiresAt: new Date(Date.now() + 30_000),
+      });
       return;
     }
     if (association.state === 'UNBINDING') return;

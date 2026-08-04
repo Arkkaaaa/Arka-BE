@@ -360,20 +360,8 @@ export async function acknowledgeDeviceCommand(
   const command = decode(await redis.get(commandKey(family, input.commandId)), CommandSchema);
   const expectedAssociationType =
     command?.kind === 'SETUP_BIND' || command?.kind === 'SETUP_UNBIND' ? 'SETUP' : 'SESSION';
-  const [association, lock] = command
-    ? await Promise.all([
-        redis
-          .get(associationKey(family, input.associationType, input.associationId))
-          .then((value) => decode(value, AssociationSchema)),
-        readDeviceLock(redis, family),
-      ])
-    : [null, null];
   if (
     !command ||
-    !association ||
-    !lock ||
-    lock.lockId !== command.lockId ||
-    association.lockId !== command.lockId ||
     expectedAssociationType !== input.associationType ||
     command.associationId !== input.associationId ||
     command.connectionId !== input.connectionId ||
@@ -387,6 +375,19 @@ export async function acknowledgeDeviceCommand(
   if (
     command.status !== 'SENT' ||
     command.lastDispatchedAtMs + COMMAND_ACK_TIMEOUT_MS <= Date.now()
+  )
+    return null;
+  const [association, lock] = await Promise.all([
+    redis
+      .get(associationKey(family, input.associationType, input.associationId))
+      .then((value) => decode(value, AssociationSchema)),
+    readDeviceLock(redis, family),
+  ]);
+  if (
+    !association ||
+    !lock ||
+    lock.lockId !== command.lockId ||
+    association.lockId !== command.lockId
   )
     return null;
   const updated = CommandSchema.parse({
