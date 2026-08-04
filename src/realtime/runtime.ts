@@ -768,7 +768,16 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     };
     await this.saveSession(runtime);
     this.#activeSessions.add(sessionId);
-    await this.publishSession(runtime, 'Menunggu perangkat dan pendamping.');
+    await this.addCompanionPresence(
+      sessionId,
+      input.ownerSessionId,
+      `http:${input.requestId}`,
+      Date.now(),
+    );
+    runtime.companionPresent = true;
+    runtime.companionEverPresent = true;
+    await this.saveSession(runtime);
+    await this.publishSession(runtime, 'Menunggu perangkat.');
     await updateMode3AssociationState(
       this.dependencies.redis,
       'SETUP',
@@ -1805,6 +1814,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       data: { status, terminalReason: reason, completedAt: new Date() },
     });
     if (changed.count === 0) return;
+    this.dependencies.logger.warn({ sessionId, status, terminalReason: reason }, 'Sesi dihentikan');
     await this.requestSessionCleanup(sessionId);
     this.#activeSessions.delete(sessionId);
     this.#nextPresenceChecks.delete(sessionId);
