@@ -3,7 +3,7 @@ import { GameMode, Prisma, type PrismaClient } from '../generated/prisma/client.
 
 export const GAME_RULE_VERSION = 'mvp-1.4.0';
 const MOTOR_GRIP_RULE_VERSION = 'mvp-1.9.0';
-const GO_NO_GO_RULE_VERSION = 'mvp-1.13.0';
+const GO_NO_GO_RULE_VERSION = 'mvp-2.0.0';
 const SEQUENCE_MEMORY_RULE_VERSION = 'mvp-1.7.0';
 const OWNER_PRESENCE_GRACE_MS = 30_000;
 
@@ -46,11 +46,12 @@ export const GAME_RULES = [
       releaseThresholdRaw: 15,
       assetCatalogVersion: 2,
       targetPreviewDurationMs: 3_000,
-      initialCueDurationMs: 2_500,
-      scoredDurationMs: 180_000,
-      targetPercent: 35,
+      transitionDurationMs: 500,
+      questionsPerLevel: 5,
+      maxTargetAppearances: 2,
+      distractorsBeforeTarget: { min: 1, max: 3 },
       levels: [
-        { level: 1, stimulusDurationMs: 3_000, totalTrials: 5 },
+        { level: 1, stimulusDurationMs: 3_000 },
         { level: 2, stimulusDurationMs: 2_000 },
       ],
       ownerPresenceGraceMs: OWNER_PRESENCE_GRACE_MS,
