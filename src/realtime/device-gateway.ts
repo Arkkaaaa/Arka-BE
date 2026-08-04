@@ -181,6 +181,10 @@ export class DeviceRealtimeGateway {
       cleanupPromise = (async () => {
         if (!connection || connection.closed) return;
         connection.closed = true;
+        this.dependencies.logger.info(
+          { connectionId: connection.connectionId, cleanupReason: reason },
+          'Koneksi perangkat dibersihkan',
+        );
         const released = await this.dependencies.redis.eval(
           RELEASE_CONNECTION_SCRIPT,
           1,
@@ -350,7 +354,12 @@ export class DeviceRealtimeGateway {
                 payload: { connectionId, heartbeatIntervalMs: 5_000, maxSequenceGap: 32 },
               }),
             );
-            await this.dispatchCommands(connection);
+            await this.dispatchCommands(connection).catch((error) =>
+              this.dependencies.logger.warn(
+                { err: error, connectionId: connection?.connectionId ?? null },
+                'Pengiriman perintah awal gagal',
+              ),
+            );
             return;
           }
 
@@ -384,7 +393,11 @@ export class DeviceRealtimeGateway {
             String(CONNECTION_TTL_SECONDS),
           );
           if (Number(renewed) !== 1) {
-            connection.closed = true;
+            this.dependencies.logger.warn(
+              { connectionId: connection.connectionId },
+              'Lease koneksi perangkat hilang',
+            );
+            await cleanup('DEVICE_CONNECTION_LEASE_LOST');
             socket.terminate();
             return;
           }
