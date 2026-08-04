@@ -416,7 +416,12 @@ export class DeviceRealtimeGateway {
             'setupId' in authenticated
               ? { type: 'SETUP' as const, id: authenticated.setupId }
               : { type: 'SESSION' as const, id: authenticated.sessionId };
-          if (!(await this.associationAllowed(association.type, association.id))) {
+          const associationDecision = await this.associationDecision(
+            association.type,
+            association.id,
+          );
+          if (associationDecision === 'DROP') return;
+          if (associationDecision === 'REJECT') {
             await this.runtime.interruptAssociation(
               association.type === 'SETUP'
                 ? { setupId: association.id }
@@ -450,12 +455,24 @@ export class DeviceRealtimeGateway {
     });
   }
 
-  private async associationAllowed(type: 'SETUP' | 'SESSION', id: string): Promise<boolean> {
+  private async associationDecision(
+    type: 'SETUP' | 'SESSION',
+    id: string,
+  ): Promise<'ALLOW' | 'DROP' | 'REJECT'> {
     const [association, lock] = await Promise.all([
       readMode3Association(this.dependencies.redis, type, id),
       readMode3Lock(this.dependencies.redis),
     ]);
-    return association?.state === 'BOUND' && association.lockId === lock?.lockId;
+    if (association?.state === 'BOUND' && association.lockId === lock?.lockId) return 'ALLOW';
+    if (
+      type === 'SETUP' &&
+      lock?.holderType === 'SESSION' &&
+      lock.setupId === id &&
+      (!association ||
+        (association.lockId === lock.lockId && association.state === 'UNBINDING'))
+    )
+      return 'DROP';
+    return 'REJECT';
   }
 
   private async updateReadiness(connection: AuthenticatedConnection): Promise<void> {

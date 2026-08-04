@@ -1285,7 +1285,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
           runtime.practicePressed = false;
           runtime.practiceDeadlineMs += COUNTDOWN_MS;
         }
-        if (runtime.practiceIndex >= 4) {
+        if (runtime.practiceIndex >= runtime.practice.length) {
           runtime.state = 'READY';
           await this.markPreparationReady(runtime);
         } else {
