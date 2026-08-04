@@ -2,7 +2,13 @@ import type { Redis } from 'ioredis';
 import type { AuthenticatedDeviceMessage } from './protocol.js';
 import { DEVICE_MAX_MESSAGES_PER_SECOND, DEVICE_MAX_SEQUENCE_GAP } from './protocol.js';
 
-export type DeviceSequenceDecision = 'ACCEPT' | 'DUPLICATE' | 'STALE' | 'GAP' | 'RATE_LIMITED';
+export type DeviceSequenceDecision =
+  | 'ACCEPT'
+  | 'DUPLICATE'
+  | 'STALE'
+  | 'GAP'
+  | 'RATE_LIMITED'
+  | 'TELEMETRY_DROPPED';
 
 const ENFORCE_SEQUENCE_SCRIPT = `
 local sequenceKey = KEYS[1]
@@ -20,13 +26,15 @@ if proposed - current > maxGap then return 'GAP' end
 local rate = redis.call('INCR', rateKey)
 if rate == 1 then redis.call('EXPIRE', rateKey, 2) end
 if rate > maxRate then return 'RATE_LIMITED' end
+local telemetryDropped = false
 if fsr then
   local fsrRate = redis.call('INCR', fsrRateKey)
   if fsrRate == 1 then redis.call('EXPIRE', fsrRateKey, 2) end
-  if fsrRate > 10 then return 'RATE_LIMITED' end
+  telemetryDropped = fsrRate > 10
 end
 redis.call('SET', sequenceKey, proposed, 'EX', 86400)
 redis.call('SET', messageKey, '1', 'EX', 300)
+if telemetryDropped then return 'TELEMETRY_DROPPED' end
 return 'ACCEPT'
 `;
 
@@ -56,7 +64,8 @@ export async function enforceDeviceSequence(
     result === 'DUPLICATE' ||
     result === 'STALE' ||
     result === 'GAP' ||
-    result === 'RATE_LIMITED'
+    result === 'RATE_LIMITED' ||
+    result === 'TELEMETRY_DROPPED'
   )
     return result;
   throw new Error('Hasil pemeriksaan urutan perangkat tidak dikenal');

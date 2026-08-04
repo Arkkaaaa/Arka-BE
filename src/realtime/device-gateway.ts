@@ -375,7 +375,7 @@ export class DeviceRealtimeGateway {
             connection.hello.bootId,
             authenticated,
           );
-          if (decision === 'DUPLICATE') return;
+          if (decision === 'DUPLICATE' || decision === 'TELEMETRY_DROPPED') return;
           if (decision !== 'ACCEPT') {
             await this.runtime.interruptAssociation(
               associationFromUnknown(authenticated),
