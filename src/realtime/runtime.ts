@@ -188,6 +188,7 @@ interface PreparationRuntime {
   practicePressed: boolean;
   practiceDeadlineMs: number | null;
   practiceFeedback?: 'CORRECT' | 'TRY_AGAIN' | 'WAIT';
+  lastCalibrationRaw: number | null;
   lastInput: TrustedDeviceInput | null;
 }
 
@@ -308,30 +309,13 @@ function createCalibrationState(): CalibrationWindowState {
   return { baselineWindow: [], activeWindow: [], activeCursor: 0 };
 }
 
-function calibrationMedian(samples: readonly number[]): number {
-  const sorted = [...samples].sort((left, right) => left - right);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 0
-    ? ((sorted[middle - 1] as number) + (sorted[middle] as number)) / 2
-    : (sorted[middle] as number);
-}
-
 function appendCalibrationSample(
   state: CalibrationWindowState,
   raw: number,
   baselineLimit: number,
   activeLimit: number,
-  minimumDeltaRaw: number,
 ): void {
   if (state.baselineWindow.length < baselineLimit) {
-    state.baselineWindow.push(raw);
-    return;
-  }
-  if (
-    state.activeWindow.length === 0 &&
-    raw < calibrationMedian(state.baselineWindow) + minimumDeltaRaw
-  ) {
-    state.baselineWindow.shift();
     state.baselineWindow.push(raw);
     return;
   }
@@ -558,6 +542,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       practiceIndex: 0,
       practicePressed: false,
       practiceDeadlineMs: null,
+      lastCalibrationRaw: null,
       lastInput: null,
     };
     let preparation;
@@ -1120,6 +1105,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     )
       return;
     runtime.lastInput = input;
+    runtime.lastCalibrationRaw = raw;
     if (runtime.state === 'CALIBRATING') {
       if (!runtime.calibrationState) return;
       if (runtime.mode === 'MOTOR_GRIP') {
@@ -1129,7 +1115,6 @@ export class AuthoritativeRuntime implements RuntimeGateway {
           raw,
           rule.baselineMinimumSamples,
           rule.activeMinimumSamples,
-          rule.minimumDeltaRaw,
         );
         const calibration = calibrateMotorGrip(
           runtime.calibrationState.baselineWindow,
@@ -1152,7 +1137,6 @@ export class AuthoritativeRuntime implements RuntimeGateway {
           raw,
           rule.releaseMinimumSamples,
           rule.pressMinimumSamples,
-          rule.minimumDeltaRaw,
         );
         const calibration = calibrateGoNoGo(
           runtime.calibrationState.baselineWindow,
@@ -2036,6 +2020,13 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         ...(runtime.calibration && typeof runtime.calibration['gripPercent'] === 'number'
           ? { gripPercent: runtime.calibration['gripPercent'] }
           : {}),
+        ...(runtime.lastCalibrationRaw === null ? {} : { sensorRaw: runtime.lastCalibrationRaw }),
+        ...(runtime.calibrationState === null
+          ? {}
+          : {
+              baselineSampleCount: runtime.calibrationState.baselineWindow.length,
+              activeSampleCount: runtime.calibrationState.activeWindow.length,
+            }),
         ...(runtime.mode === 'GO_NO_GO' && runtime.calibration
           ? { pressed: runtime.edge.pressed }
           : {}),
