@@ -72,6 +72,7 @@ export interface GoNoGoState {
   readonly targetPreviewEndsAtMs: number;
   readonly trialStartedAtMs: number;
   readonly responseClosesAtMs: number;
+  readonly feedbackEndsAtMs: number | null;
   readonly firstPressAtMs: number | null;
   readonly duplicatePresses: number;
   readonly outOfWindowPresses: number;
@@ -79,6 +80,7 @@ export interface GoNoGoState {
   readonly pauseRemainingMs: number | null;
   readonly pauseTrialStartsInMs: number | null;
   readonly pauseTargetPreviewEndsInMs: number | null;
+  readonly pauseFeedbackEndsInMs: number | null;
   readonly trials: readonly GoNoGoTrialResult[];
   readonly completion: EngineCompletion<GoNoGoMetrics, GoNoGoTrialResult> | null;
 }
@@ -109,10 +111,8 @@ interface ExactAsset {
   readonly assetIndex: number;
 }
 
+const FEEDBACK_DURATION_MS = 600;
 const NON_TARGET_ASSETS: readonly ExactAsset[] = [
-  { stimulus: 'WAYANG', assetIndex: 1 },
-  { stimulus: 'WAYANG', assetIndex: 2 },
-  { stimulus: 'WAYANG', assetIndex: 3 },
   { stimulus: 'BATIK', assetIndex: 0 },
   { stimulus: 'BATIK', assetIndex: 1 },
   { stimulus: 'BATIK', assetIndex: 2 },
@@ -214,7 +214,9 @@ export function generateGoNoGoPlan(seed: number, config: GoNoGoConfig): readonly
     previousLevel = level;
     let asset: ExactAsset;
     if (targets[index]) {
-      asset = { stimulus: 'WAYANG', assetIndex: 0 };
+      const [random, next] = nextRandom(cursor);
+      cursor = next;
+      asset = { stimulus: 'WAYANG', assetIndex: Math.floor(random * 4) };
     } else {
       const candidates = NON_TARGET_ASSETS.filter((candidate) => !sameAsset(previousAsset, candidate));
       const [random, next] = nextRandom(cursor);
@@ -229,7 +231,7 @@ export function generateGoNoGoPlan(seed: number, config: GoNoGoConfig): readonly
       stimulusDurationMs: durationMs,
       stimulus: asset.stimulus,
       assetIndex: asset.assetIndex,
-      isTarget: asset.stimulus === 'WAYANG' && asset.assetIndex === 0,
+      isTarget: asset.stimulus === 'WAYANG',
     };
   });
 }
@@ -251,6 +253,7 @@ export function createGoNoGo(config: GoNoGoConfig, seed: number, nowMs: number):
     targetPreviewEndsAtMs,
     trialStartedAtMs,
     responseClosesAtMs: trialStartedAtMs + plan[0]!.stimulusDurationMs,
+    feedbackEndsAtMs: null,
     firstPressAtMs: null,
     duplicatePresses: 0,
     outOfWindowPresses: 0,
@@ -258,6 +261,7 @@ export function createGoNoGo(config: GoNoGoConfig, seed: number, nowMs: number):
     pauseRemainingMs: null,
     pauseTrialStartsInMs: null,
     pauseTargetPreviewEndsInMs: null,
+    pauseFeedbackEndsInMs: null,
     trials: [],
     completion: null,
   };
@@ -310,9 +314,9 @@ function completionFor(
   };
 }
 
-function closeCurrentTrial(state: GoNoGoState): GoNoGoState {
+function closeCurrentTrial(state: GoNoGoState, closedAtMs: number): GoNoGoState {
   const plan = state.plan[state.currentTrialIndex];
-  if (!plan) return state;
+  if (!plan || state.feedbackEndsAtMs !== null) return state;
   const pressed = state.firstPressAtMs !== null;
   const trial: GoNoGoTrialResult = {
     ...plan,
@@ -320,19 +324,33 @@ function closeCurrentTrial(state: GoNoGoState): GoNoGoState {
     reactionMs: state.firstPressAtMs === null ? null : state.firstPressAtMs - state.trialStartedAtMs,
     duplicatePresses: state.duplicatePresses,
     stimulusStartedAtMs: state.trialStartedAtMs,
-    responseClosedAtMs: state.responseClosesAtMs,
+    responseClosedAtMs: closedAtMs,
   };
-  const trials = [...state.trials, trial];
-  if (trials.length >= state.plan.length) {
-    return { ...state, lifecycle: 'COMPLETED', trials, completion: completionFor(trials, state.config) };
-  }
-  const nextPlan = state.plan[state.currentTrialIndex + 1]!;
   return {
     ...state,
-    trials,
-    currentTrialIndex: state.currentTrialIndex + 1,
-    trialStartedAtMs: state.responseClosesAtMs,
-    responseClosesAtMs: state.responseClosesAtMs + nextPlan.stimulusDurationMs,
+    trials: [...state.trials, trial],
+    responseClosesAtMs: closedAtMs,
+    feedbackEndsAtMs: closedAtMs + FEEDBACK_DURATION_MS,
+  };
+}
+
+function beginNextTrial(state: GoNoGoState, startsAtMs: number): GoNoGoState {
+  if (state.trials.length >= state.plan.length) {
+    return {
+      ...state,
+      lifecycle: 'COMPLETED',
+      feedbackEndsAtMs: null,
+      completion: completionFor(state.trials, state.config),
+    };
+  }
+  const currentTrialIndex = state.currentTrialIndex + 1;
+  const nextPlan = state.plan[currentTrialIndex]!;
+  return {
+    ...state,
+    currentTrialIndex,
+    trialStartedAtMs: startsAtMs,
+    responseClosesAtMs: startsAtMs + nextPlan.stimulusDurationMs,
+    feedbackEndsAtMs: null,
     firstPressAtMs: null,
     duplicatePresses: 0,
   };
@@ -342,7 +360,15 @@ function advance(state: GoNoGoState, nowMs: number): GoNoGoState {
   assertMonotonic(nowMs, state.lastNowMs);
   let next = { ...state, lastNowMs: nowMs };
   if (next.lifecycle !== 'PLAYING') return next;
-  while (next.lifecycle === 'PLAYING' && nowMs >= next.responseClosesAtMs) next = closeCurrentTrial(next);
+  while (next.lifecycle === 'PLAYING') {
+    if (next.feedbackEndsAtMs !== null) {
+      if (nowMs < next.feedbackEndsAtMs) break;
+      next = beginNextTrial(next, next.feedbackEndsAtMs);
+      continue;
+    }
+    if (nowMs < next.responseClosesAtMs) break;
+    next = closeCurrentTrial(next, next.responseClosesAtMs);
+  }
   return next;
 }
 
@@ -352,8 +378,9 @@ function transition(state: GoNoGoState, acceptedPress: boolean): GoNoGoTransitio
     (trial) => trial.outcome === 'HIT' || trial.outcome === 'CORRECT_REJECTION',
   ).length;
   const last = state.trials.at(-1);
+  const showingFeedback = state.feedbackEndsAtMs !== null || state.lifecycle === 'COMPLETED';
   const feedback =
-    state.lifecycle === 'COMPLETED' && last
+    showingFeedback && last
       ? last.outcome === 'HIT' || last.outcome === 'CORRECT_REJECTION'
         ? 'CORRECT'
         : last.outcome === 'MISS'
@@ -363,9 +390,11 @@ function transition(state: GoNoGoState, acceptedPress: boolean): GoNoGoTransitio
         ? 'WAIT'
         : null;
   const scoredBeforeCurrentMs = state.trials.reduce((total, trial) => total + trial.stimulusDurationMs, 0);
-  const currentElapsedMs = state.lifecycle === 'PAUSED'
-    ? current.stimulusDurationMs - (state.pauseRemainingMs ?? current.stimulusDurationMs)
-    : state.lastNowMs - state.trialStartedAtMs;
+  const currentElapsedMs = showingFeedback
+    ? 0
+    : state.lifecycle === 'PAUSED'
+      ? current.stimulusDurationMs - (state.pauseRemainingMs ?? current.stimulusDurationMs)
+      : state.lastNowMs - state.trialStartedAtMs;
   const activeElapsedMs = clamp(
     scoredBeforeCurrentMs + (state.lifecycle === 'COMPLETED' ? 0 : clamp(currentElapsedMs, 0, current.stimulusDurationMs)),
     0,
@@ -377,7 +406,7 @@ function transition(state: GoNoGoState, acceptedPress: boolean): GoNoGoTransitio
   const cueActive = state.lifecycle !== 'COMPLETED' && !targetPreviewActive && (state.lifecycle === 'PAUSED'
     ? (state.pauseTrialStartsInMs ?? 0) > 0
     : state.lastNowMs < state.trialStartedAtMs);
-  const phase = state.lifecycle === 'COMPLETED'
+  const phase = showingFeedback
     ? 'FEEDBACK'
     : targetPreviewActive
       ? 'TARGET_PREVIEW'
@@ -417,10 +446,11 @@ export function pressGoNoGo(state: GoNoGoState, nowMs: number): GoNoGoTransition
     if (next.lifecycle === 'PLAYING') next = { ...next, outOfWindowPresses: next.outOfWindowPresses + 1 };
     return transition(next, false);
   }
-  if (next.firstPressAtMs !== null) {
+  if (next.firstPressAtMs !== null || next.feedbackEndsAtMs !== null) {
     return transition({ ...next, duplicatePresses: next.duplicatePresses + 1 }, false);
   }
-  return transition({ ...next, firstPressAtMs: nowMs }, true);
+  next = { ...next, firstPressAtMs: nowMs };
+  return transition(closeCurrentTrial(next, nowMs), true);
 }
 
 export function tickGoNoGo(state: GoNoGoState, nowMs: number): GoNoGoTransition {
@@ -437,6 +467,8 @@ export function pauseGoNoGo(state: GoNoGoState, nowMs: number): GoNoGoTransition
       pauseRemainingMs: next.responseClosesAtMs - nowMs,
       pauseTrialStartsInMs: next.trialStartedAtMs - nowMs,
       pauseTargetPreviewEndsInMs: next.targetPreviewEndsAtMs - nowMs,
+      pauseFeedbackEndsInMs:
+        next.feedbackEndsAtMs === null ? null : next.feedbackEndsAtMs - nowMs,
     },
     false,
   );
@@ -460,9 +492,12 @@ export function resumeGoNoGo(state: GoNoGoState, nowMs: number): GoNoGoTransitio
       targetPreviewEndsAtMs: nowMs + state.pauseTargetPreviewEndsInMs,
       trialStartedAtMs: nowMs + state.pauseTrialStartsInMs,
       responseClosesAtMs: nowMs + state.pauseRemainingMs,
+      feedbackEndsAtMs:
+        state.pauseFeedbackEndsInMs === null ? null : nowMs + state.pauseFeedbackEndsInMs,
       pauseRemainingMs: null,
       pauseTrialStartsInMs: null,
       pauseTargetPreviewEndsInMs: null,
+      pauseFeedbackEndsInMs: null,
     },
     false,
   );

@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   CreateGameSessionResponseSchema,
   FruitVariantSchema,
+  GameMetricsSchema,
   GameSessionDtoSchema,
   mapStoredAiSummary,
   PreparationDtoSchema,
@@ -14,6 +15,10 @@ import {
 import { Prisma } from '../generated/prisma/client.js';
 import { AppError } from '../middleware/errors.js';
 import { writeAudit } from '../services/audit.js';
+import {
+  deterministicSessionSummary,
+  upsertParticipantSummary,
+} from '../services/participant-summary.js';
 import {
   acquireMode3Lock,
   clearMode3Ownership,
@@ -748,7 +753,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       countdownEndsAtMs: null,
       lastSequenceCueKey: null,
       engine: null,
-      edge: { pressed: false, armed: true },
+      edge: { pressed: false, armed: false },
       lastInput: null,
     };
     await this.saveSession(runtime);
@@ -1152,7 +1157,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
           runtime.state = 'PRACTICING';
           runtime.practice = createGoNoGoPracticePlan();
           runtime.practiceDeadlineMs = input.receivedAtMs + COUNTDOWN_MS;
-          runtime.edge = { pressed: false, armed: true };
+          runtime.edge = { pressed: false, armed: false };
           const updated = await this.dependencies.prisma.trGamePreparation.updateMany({
             where: { setupId, state: 'CALIBRATING' },
             data: { state: 'PRACTICING', calibrationSnapshot: toInputJson(runtime.calibration) },
@@ -1611,10 +1616,24 @@ export class AuthoritativeRuntime implements RuntimeGateway {
               },
             });
           }
-          await tx.trAiSessionSummary.create({
-            data: { sessionId: session.id, status: 'PENDING' },
-          });
         }
+        const metrics = GameMetricsSchema.parse(payload.metrics);
+        const fallback = deterministicSessionSummary(metrics, payload.score);
+        await tx.trAiSessionSummary.upsert({
+          where: { sessionId: session.id },
+          create: {
+            sessionId: session.id,
+            status: 'PENDING',
+            summaryText: fallback.participant.summaryText,
+            observations: fallback,
+          },
+          update: {
+            summaryText: fallback.participant.summaryText,
+            observations: fallback,
+          },
+        });
+        if (session.participantId)
+          await upsertParticipantSummary(tx, session.participantId, session.institutionId);
         const saved = await tx.trGameSession.updateMany({
           where: { id: session.id, status: 'SAVING', finalizationLeaseToken: leaseToken },
           data: {
@@ -2117,11 +2136,17 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       observations: Prisma.JsonValue | null;
     } | null;
   }): GameSessionDto {
-    const aiSummary = mapStoredAiSummary(
-      session.aiSummary?.status,
-      session.aiSummary?.summaryText,
-      session.aiSummary?.observations,
-    );
+    const fallback = session.result
+      ? deterministicSessionSummary(GameMetricsSchema.parse(session.result.metrics), session.result.score)
+      : null;
+    const aiSummary = fallback
+      ? mapStoredAiSummary(
+          session.aiSummary?.status,
+          session.aiSummary?.summaryText,
+          session.aiSummary?.observations,
+          fallback,
+        )
+      : null;
     return GameSessionDtoSchema.parse({
       sessionId: session.id,
       status: session.status,

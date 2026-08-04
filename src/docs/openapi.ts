@@ -1213,13 +1213,13 @@ export const arkaOpenApi = {
         oneOf: [
           {
             type: 'object',
-            required: ['status'],
-            properties: { status: { type: 'string', const: 'PENDING' } },
+            required: ['status', 'participant', 'clinician'],
+            properties: { status: { type: 'string', const: 'PENDING' }, participant: ref('AiAudienceSummary'), clinician: ref('AiAudienceSummary') },
           },
           {
             type: 'object',
-            required: ['status'],
-            properties: { status: { type: 'string', const: 'UNAVAILABLE' } },
+            required: ['status', 'participant', 'clinician'],
+            properties: { status: { type: 'string', const: 'UNAVAILABLE' }, participant: ref('AiAudienceSummary'), clinician: ref('AiAudienceSummary') },
           },
           {
             type: 'object',

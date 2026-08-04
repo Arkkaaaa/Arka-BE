@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import {
+  GameMetricsSchema,
   GameSessionDtoSchema,
   mapStoredAiSummary,
   type CreateGameSessionResponse,
@@ -7,6 +8,7 @@ import {
   type PreparationDto,
 } from '../../schemas/index.js';
 import { AppError } from '../../middleware/errors.js';
+import { deterministicSessionSummary } from '../../services/participant-summary.js';
 import type { RuntimeGateway } from '../../realtime/index.js';
 import type { AuditContext, AuditEvent } from '../../services/audit.js';
 import type { GameRepository, PersistedGameSession } from './game.repository.js';
@@ -35,11 +37,17 @@ function auditContext(context: GameRequestContext): AuditContext {
 }
 
 export function mapGameSession(session: PersistedGameSession): GameSessionDto {
-  const aiSummary = mapStoredAiSummary(
-    session.aiSummary?.status,
-    session.aiSummary?.summaryText,
-    session.aiSummary?.observations,
-  );
+  const fallback = session.result
+    ? deterministicSessionSummary(GameMetricsSchema.parse(session.result.metrics), session.result.score)
+    : null;
+  const aiSummary = fallback
+    ? mapStoredAiSummary(
+        session.aiSummary?.status,
+        session.aiSummary?.summaryText,
+        session.aiSummary?.observations,
+        fallback,
+      )
+    : null;
 
   return GameSessionDtoSchema.parse({
     sessionId: session.id,

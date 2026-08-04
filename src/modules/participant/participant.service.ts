@@ -87,9 +87,9 @@ function overallMetrics(mode: GameMode, results: readonly { score: number; metri
     return {
       mode,
       averageScore,
-      averagePeakGripPercent: average(metrics.map((value) => value.peakGripPercent)) ?? 0,
+      averagePeakKilograms: average(metrics.map((value) => value.peakKilograms)) ?? 0,
+      averageKilograms: average(metrics.map((value) => value.averageKilograms)) ?? 0,
       averageContinuousHoldMs: average(metrics.map((value) => value.continuousHoldMs)) ?? 0,
-      targetCompletionPercent: (metrics.filter((value) => value.targetCompleted).length / metrics.length) * 100,
     };
   }
   if (mode === 'GO_NO_GO') {
@@ -185,9 +185,18 @@ export class ParticipantService {
   ): Promise<ParticipantDetailDto> {
     const participant = await this.repository.findByHandle(institutionId, participantHandle);
     if (!participant) throw new AppError(404, 'participant_not_found', 'Peserta tidak ditemukan.');
-    const modeSummaries = await this.repository.modeSummaries(institutionId, participant.id);
+    const [modeSummaries, aggregateSummary] = await Promise.all([
+      this.repository.modeSummaries(institutionId, participant.id),
+      this.repository.participantSummary(institutionId, participant.id),
+    ]);
     return ParticipantDetailDtoSchema.parse({
       ...participantDto(participant),
+      aggregateSummary: aggregateSummary
+        ? {
+            ...aggregateSummary,
+            updatedAt: aggregateSummary.updatedAt.toISOString(),
+          }
+        : null,
       modeSummaries: modeSummaries.map((summary) => ({
         mode: summary.mode,
         savedSessionsTotal: summary.savedSessionsTotal,

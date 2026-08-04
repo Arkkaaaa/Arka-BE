@@ -218,7 +218,11 @@ function advance(state: MotorGripState, nowMs: number): MotorGripState {
     timeAtOrAboveTargetMs,
     gripSamples,
   };
-  if (next.activeElapsedMs >= state.config.sessionDurationMs) next = complete(next);
+  if (
+    next.longestHoldMs >= state.config.targetHoldMs ||
+    next.activeElapsedMs >= state.config.sessionDurationMs
+  )
+    next = complete(next);
   return next;
 }
 

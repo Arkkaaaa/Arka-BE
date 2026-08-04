@@ -78,6 +78,7 @@ model MsInstitution {
   preparations TrGamePreparation[]
   sessions     TrGameSession[]
   results      TrGameResult[]
+  participantSummaries TrParticipantSummary[]
   audits       TrAuditLog[]
 
   @@index([status])
@@ -159,6 +160,7 @@ model MsParticipant {
   preparations         TrGamePreparation[]
   sessions             TrGameSession[]
   results              TrGameResult[]
+  summary              TrParticipantSummary?
 
   @@unique([institutionId, participantReference])
   @@unique([id, institutionId], map: "MsParticipant_tenant_identity_key")
@@ -319,6 +321,23 @@ model TrGameTrial {
 
   @@unique([sessionId, trialIndex, attemptIndex])
   @@index([sessionId])
+}
+
+model TrParticipantSummary {
+  id                 String        @id @default(uuid()) @db.Uuid
+  participantId      String        @unique @db.Uuid
+  participant        MsParticipant @relation(fields: [participantId], references: [id], onDelete: Cascade)
+  institutionId      String        @db.Uuid
+  institution        MsInstitution @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  savedSessionsTotal Int           @default(0)
+  aggregateMetrics   Json
+  participantSummary String        @db.VarChar(700)
+  clinicianSummary   String        @db.VarChar(1000)
+  source              String        @default("DETERMINISTIC") @db.VarChar(32)
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  @@index([institutionId, updatedAt])
 }
 
 model TrAiSessionSummary {

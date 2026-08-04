@@ -127,6 +127,9 @@ export function classifyFsrEdge(
       return { state: { pressed: false, armed: true }, edge: 'RELEASE', instruction: null };
     return { state, edge: null, instruction: 'RELEASE' };
   }
+  if (!state.armed && raw < releaseThreshold) {
+    return { state: { pressed: false, armed: true }, edge: null, instruction: null };
+  }
   if (state.armed && raw >= pressThreshold) {
     return { state: { pressed: true, armed: false }, edge: 'PRESS', instruction: 'RELEASE' };
   }

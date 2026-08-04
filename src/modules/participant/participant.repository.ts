@@ -89,6 +89,18 @@ export class ParticipantRepository {
     });
   }
 
+  public participantSummary(institutionId: string, participantId: string) {
+    return this.prisma.trParticipantSummary.findFirst({
+      where: { institutionId, participantId },
+      select: {
+        savedSessionsTotal: true,
+        participantSummary: true,
+        clinicianSummary: true,
+        updatedAt: true,
+      },
+    });
+  }
+
   public async modeSummaries(institutionId: string, participantId: string) {
     const modes: readonly GameMode[] = ['MOTOR_GRIP', 'GO_NO_GO', 'SEQUENCE_MEMORY'];
     return Promise.all(

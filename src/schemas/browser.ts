@@ -116,9 +116,9 @@ export const ParticipantOverallMetricsSchema = z.discriminatedUnion('mode', [
   z.object({
     mode: z.literal('MOTOR_GRIP'),
     averageScore: z.number().int().min(0).max(1000),
-    averagePeakGripPercent: z.number().min(0).max(100),
+    averagePeakKilograms: z.number().min(0).max(5),
+    averageKilograms: z.number().min(0).max(5),
     averageContinuousHoldMs: z.number().nonnegative(),
-    targetCompletionPercent: z.number().min(0).max(100),
   }),
   z.object({
     mode: z.literal('GO_NO_GO'),
@@ -156,6 +156,12 @@ export const ParticipantModeSummaryDtoSchema = z.object({
 });
 export const ParticipantDetailDtoSchema = ParticipantDtoSchema.extend({
   modeSummaries: z.array(ParticipantModeSummaryDtoSchema).length(3),
+  aggregateSummary: z.object({
+    savedSessionsTotal: z.number().int().nonnegative(),
+    participantSummary: z.string().max(700),
+    clinicianSummary: z.string().max(1000),
+    updatedAt: IsoDateSchema,
+  }).nullable(),
 });
 export type ParticipantDetailDto = z.infer<typeof ParticipantDetailDtoSchema>;
 export const ParticipantSearchQuerySchema = z.object({
@@ -393,13 +399,9 @@ export const AiAudienceSummarySchema = z.object({
   observations: z.array(z.string().max(140)).max(3),
 });
 export const AiSummaryDtoSchema = z.discriminatedUnion('status', [
-  z.object({ status: z.literal('PENDING') }),
-  z.object({ status: z.literal('UNAVAILABLE') }),
-  z.object({
-    status: z.literal('READY'),
-    participant: AiAudienceSummarySchema,
-    clinician: AiAudienceSummarySchema,
-  }),
+  z.object({ status: z.literal('PENDING'), participant: AiAudienceSummarySchema, clinician: AiAudienceSummarySchema }),
+  z.object({ status: z.literal('UNAVAILABLE'), participant: AiAudienceSummarySchema, clinician: AiAudienceSummarySchema }),
+  z.object({ status: z.literal('READY'), participant: AiAudienceSummarySchema, clinician: AiAudienceSummarySchema }),
 ]);
 export type AiSummaryDto = z.infer<typeof AiSummaryDtoSchema>;
 
@@ -412,16 +414,18 @@ export function mapStoredAiSummary(
   status: string | undefined,
   summaryText: string | null | undefined,
   observations: unknown,
+  fallback: z.infer<typeof StoredDualAiSummarySchema>,
 ): AiSummaryDto {
-  if (status === 'READY' && summaryText) {
-    if (Array.isArray(observations)) {
-      const legacy = AiAudienceSummarySchema.parse({ summaryText, observations });
-      return { status: 'READY', participant: legacy, clinician: legacy };
-    }
-
-    return { status: 'READY', ...StoredDualAiSummarySchema.parse(observations) };
+  let content = fallback;
+  if (summaryText && Array.isArray(observations)) {
+    const legacy = AiAudienceSummarySchema.safeParse({ summaryText, observations });
+    if (legacy.success) content = { participant: legacy.data, clinician: legacy.data };
+  } else {
+    const stored = StoredDualAiSummarySchema.safeParse(observations);
+    if (stored.success) content = stored.data;
   }
-  return status === 'UNAVAILABLE' ? { status: 'UNAVAILABLE' } : { status: 'PENDING' };
+  const normalizedStatus = status === 'READY' || status === 'UNAVAILABLE' ? status : 'PENDING';
+  return { status: normalizedStatus, ...content };
 }
 export const GameResultDtoSchema = z.object({
   score: z.number().int().min(0).max(1000),
