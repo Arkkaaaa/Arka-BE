@@ -1289,7 +1289,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
   ): Promise<void> {
     const runtime = await this.loadSession(sessionId);
     if (!runtime || runtime.status !== 'PLAYING' || !runtime.engine) return;
-    const now = trusted.receivedAtMs;
+    const now = Math.max(trusted.receivedAtMs, runtime.engine.lastNowMs);
     runtime.lastInput = trusted;
     let completed = null;
     if (runtime.engine.mode === 'MOTOR_GRIP' && input.kind === 'FSR') {
