@@ -391,8 +391,10 @@ function closeQuestion(
 function advance(state: GoNoGoState, nowMs: number): GoNoGoState {
   assertMonotonic(nowMs, state.lastNowMs);
   if (state.lifecycle !== 'PLAYING') return { ...state, lastNowMs: nowMs };
-  let next: GoNoGoState = { ...state, lastNowMs: nowMs };
-  while (next.lifecycle === 'PLAYING' && nowMs >= next.responseClosesAtMs) {
+  const activeRemainingMs = Math.max(0, LEGACY_MAX_SESSION_MS - state.activeElapsedMs);
+  const effectiveNowMs = Math.min(nowMs, state.lastNowMs + activeRemainingMs);
+  let next: GoNoGoState = { ...state, lastNowMs: effectiveNowMs };
+  while (next.lifecycle === 'PLAYING' && effectiveNowMs >= next.responseClosesAtMs) {
     const question = next.plan[next.currentTrialIndex]!;
     const candidate = question.candidates[next.currentCandidateIndex]!;
     if (candidate.targetAppearance === next.config.maxTargetAppearances) {
@@ -408,15 +410,50 @@ function advance(state: GoNoGoState, nowMs: number): GoNoGoState {
     }
   }
   const elapsedUntilMs =
-    next.lifecycle === 'COMPLETED' ? next.trials.at(-1)!.responseClosedAtMs : nowMs;
-  return {
-    ...next,
-    activeElapsedMs: clamp(
-      state.activeElapsedMs + Math.max(0, elapsedUntilMs - state.lastNowMs),
-      0,
-      LEGACY_MAX_SESSION_MS,
-    ),
-  };
+    next.lifecycle === 'COMPLETED' ? next.trials.at(-1)!.responseClosedAtMs : effectiveNowMs;
+  const activeElapsedMs = clamp(
+    state.activeElapsedMs + Math.max(0, elapsedUntilMs - state.lastNowMs),
+    0,
+    LEGACY_MAX_SESSION_MS,
+  );
+  if (next.lifecycle === 'PLAYING' && activeElapsedMs >= LEGACY_MAX_SESSION_MS) {
+    const timeoutTrials = [...next.trials];
+    for (let index = next.currentTrialIndex; index < next.plan.length; index += 1) {
+      const question = next.plan[index]!;
+      timeoutTrials.push({
+        index: question.index,
+        trialIndex: question.trialIndex,
+        questionNumber: question.questionNumber,
+        level: question.level,
+        levelTrialNumber: question.levelTrialNumber,
+        levelQuestionNumber: question.levelQuestionNumber,
+        stimulusDurationMs: question.stimulusDurationMs,
+        stimulus: question.stimulus,
+        assetIndex: question.assetIndex,
+        isTarget: true,
+        targetStimulus: question.targetStimulus,
+        targetAssetIndex: question.targetAssetIndex,
+        outcome: 'MISS',
+        reactionMs: null,
+        duplicatePresses: 0,
+        stimulusStartedAtMs: next.candidateStartedAtMs,
+        responseClosedAtMs: effectiveNowMs,
+        questionStartedAtMs: next.questionStartedAtMs,
+        pressedCandidateStimulus: null,
+        pressedCandidateAssetIndex: null,
+        pressedCandidateIndex: null,
+        targetAppearance: null,
+      });
+    }
+    return {
+      ...next,
+      lifecycle: 'COMPLETED',
+      activeElapsedMs,
+      trials: timeoutTrials,
+      completion: completionFor(timeoutTrials, state.config),
+    };
+  }
+  return { ...next, activeElapsedMs };
 }
 
 function transition(state: GoNoGoState, acceptedPress: boolean): GoNoGoTransition {

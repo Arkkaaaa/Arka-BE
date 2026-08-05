@@ -6,13 +6,13 @@ import type { Logger } from '../config/logger.js';
 import type { PrismaClient } from '../generated/prisma/client.js';
 
 const INDONESIAN_CUE =
-  /\b(?:adalah|agar|akurasi|atau|baik|belum|buah|cepat|cukup|dalam|dan|dapat|dengan|di|dari|durasi|genggaman|hasil|ini|juga|karena|ke|kilogram|kinerja|konsisten|lambat|level|lebih|memori|mencapai|menunjukkan|performa|permainan|perlu|pada|rata-rata|reaksi|respons|ringkasan|sesi|skor|stabil|stimulus|sudah|target|tercatat|tidak|tingkat|untuk|yang)\b/iu;
+  /\b(?:adalah|agar|akurasi|atau|baik|belum|buah|cepat|cengkeraman|cukup|dalam|dan|dapat|dengan|di|dari|durasi|genggaman|hasil|ini|juga|karena|ke|kilogram|kinerja|konsisten|lambat|level|lebih|memori|mencapai|menunjukkan|milidetik|performa|permainan|perlu|pada|rata-rata|reaksi|respons|ringkasan|sesi|skor|stabil|stimulus|sudah|target|tercatat|tidak|tingkat|untuk|waktu|yang)\b/iu;
 const PLAIN_TEXT = /^[\p{L}\p{N} ,.;:!?()%'’-]+$/u;
 const PROHIBITED_SUMMARY_TEXT =
   /(?:<[^>]*>|\[[^\]]*\]\([^)]*\)|(?:https?:\/\/|www\.|\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b)|\b(?:identitas|nama|diagnos\w*|demensia|alzheimer|medis|klinis|terapi|pengobatan|rekomendasi|saran|anjuran|risiko|normal|abnormal|bahaya|sebaiknya|silakan|harus|lakukan|coba|tingkatkan|kurangi|konsultasikan)\b)/iu;
 const METRIC_CUES = {
   MOTOR_GRIP:
-    /\b(?:skor|buah|stroberi|tomat|pisang|jeruk|apel|semangka|kilogram|kg|kekuatan puncak|genggaman puncak|genggaman rata-rata|rata-rata genggaman|tahanan kontinu|waktu di atas target|target|waktu permainan)\b/iu,
+    /\b(?:skor|buah|stroberi|tomat|pisang|jeruk|apel|semangka|kilogram|kg|kekuatan puncak|kekuatan cengkeraman|genggaman puncak|genggaman rata-rata|rata-rata genggaman|rata-rata kekuatan|tahanan kontinu|hold kontinu|waktu hold|waktu di atas target|target|waktu permainan)\b/iu,
   GO_NO_GO:
     /\b(?:skor|level|tingkat|durasi stimulus|total stimulus|stimulus target|stimulus non-target|respons tepat|belum merespons|false positive|berhasil menunggu|akurasi|waktu respons)\b/iu,
   SEQUENCE_MEMORY:
