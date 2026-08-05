@@ -15,6 +15,11 @@ import {
 } from '../../schemas/index.js';
 import { z } from 'zod';
 import { AppError } from '../../middleware/errors.js';
+import {
+  MotorGripTargetsSchema,
+  progressionEvent,
+  replayMotorGripProgression,
+} from '../../game/motor-grip-progression.js';
 import type { AuditContext } from '../../services/audit.js';
 import type {
   ParticipantRepository,
@@ -185,10 +190,21 @@ export class ParticipantService {
   ): Promise<ParticipantDetailDto> {
     const participant = await this.repository.findByHandle(institutionId, participantHandle);
     if (!participant) throw new AppError(404, 'participant_not_found', 'Peserta tidak ditemukan.');
-    const [modeSummaries, aggregateSummary] = await Promise.all([
+    const [modeSummaries, aggregateSummary, motorRuleRecord] = await Promise.all([
       this.repository.modeSummaries(institutionId, participant.id),
       this.repository.participantSummary(institutionId, participant.id),
+      this.repository.activeMotorGripRule(institutionId),
     ]);
+    const motorSummary = modeSummaries.find((summary) => summary.mode === 'MOTOR_GRIP');
+    const motorProgression = replayMotorGripProgression(
+      (motorSummary?.results ?? []).flatMap((result) => {
+        const event = progressionEvent(result);
+        return event ? [event] : [];
+      }),
+    );
+    if (!motorRuleRecord)
+      throw new AppError(409, 'game_rule_unavailable', 'Aturan permainan belum tersedia.');
+    const motorTargets = MotorGripTargetsSchema.parse(motorRuleRecord.config);
     return ParticipantDetailDtoSchema.parse({
       ...participantDto(participant),
       aggregateSummary: aggregateSummary
@@ -209,6 +225,20 @@ export class ParticipantService {
             }
           : null,
         overallMetrics: overallMetrics(summary.mode, summary.results),
+        adaptiveLevel: summary.mode === 'MOTOR_GRIP'
+          ? {
+              fruitVariant: motorProgression.fruitVariant,
+              level: motorProgression.level,
+              levelsTotal: motorProgression.levelsTotal,
+              targetKilograms: motorTargets.fruitTargetsKilograms[motorProgression.fruitVariant],
+              activeLevelEvaluation: {
+                completedSessions: motorProgression.completedSessions,
+                requiredSessions: 3,
+                targetCompleted: motorProgression.targetCompleted,
+                targetFailed: motorProgression.targetFailed,
+              },
+            }
+          : null,
       })),
     });
   }

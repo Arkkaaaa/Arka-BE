@@ -144,6 +144,18 @@ export const ParticipantOverallMetricsSchema = z.discriminatedUnion('mode', [
     })).max(6),
   }),
 ]);
+export const MotorGripAdaptiveLevelDtoSchema = z.object({
+  fruitVariant: FruitVariantSchema,
+  level: z.number().int().min(1).max(6),
+  levelsTotal: z.literal(6),
+  targetKilograms: z.number().positive().max(120),
+  activeLevelEvaluation: z.object({
+    completedSessions: z.number().int().min(0).max(2),
+    requiredSessions: z.literal(3),
+    targetCompleted: z.number().int().min(0).max(2),
+    targetFailed: z.number().int().min(0).max(2),
+  }),
+});
 export const ParticipantModeSummaryDtoSchema = z.object({
   mode: GameModeSchema,
   savedSessionsTotal: z.number().int().nonnegative(),
@@ -154,6 +166,7 @@ export const ParticipantModeSummaryDtoSchema = z.object({
     gameRuleVersion: z.string().max(80),
   }).nullable(),
   overallMetrics: ParticipantOverallMetricsSchema.nullable(),
+  adaptiveLevel: MotorGripAdaptiveLevelDtoSchema.nullable(),
 });
 export const ParticipantDetailDtoSchema = ParticipantDtoSchema.extend({
   modeSummaries: z.array(ParticipantModeSummaryDtoSchema).length(3),

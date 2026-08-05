@@ -101,6 +101,13 @@ export class ParticipantRepository {
     });
   }
 
+  public activeMotorGripRule(institutionId: string) {
+    return this.prisma.msGameRuleVersion.findFirst({
+      where: { institutionId, mode: 'MOTOR_GRIP', isActive: true, approvedAt: { not: null } },
+      select: { config: true },
+    });
+  }
+
   public async modeSummaries(institutionId: string, participantId: string) {
     const modes: readonly GameMode[] = ['MOTOR_GRIP', 'GO_NO_GO', 'SEQUENCE_MEMORY'];
     return Promise.all(

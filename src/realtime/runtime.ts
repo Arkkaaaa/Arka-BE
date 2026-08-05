@@ -55,6 +55,10 @@ import {
   type MotorGripState,
 } from '../game/motor-grip.js';
 import {
+  progressionEvent,
+  replayMotorGripProgression,
+} from '../game/motor-grip-progression.js';
+import {
   createGoNoGo,
   pauseGoNoGo,
   pressGoNoGo,
@@ -454,40 +458,25 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     const ruleConfig = parseRule(input.mode, rule.config);
     let config = ruleConfig;
     if (input.mode === 'MOTOR_GRIP') {
-      const progression: readonly z.infer<typeof FruitVariantSchema>[] = [
-        'STRAWBERRY',
-        'TOMATO',
-        'BANANA',
-        'ORANGE',
-        'APPLE',
-        'WATERMELON',
-      ];
       const results = input.participantReference
         ? await this.dependencies.prisma.trGameResult.findMany({
             where: {
               institutionId: input.institutionId,
               mode: 'MOTOR_GRIP',
-              gameRuleVersion: rule.version,
+              session: { status: 'SAVED' },
               participant: { participantReference: input.participantReference },
             },
-            select: { metrics: true },
-            orderBy: { completedAt: 'desc' },
+            select: { sessionId: true, completedAt: true, metrics: true },
+            orderBy: [{ completedAt: 'asc' }, { sessionId: 'asc' }],
           })
         : [];
-      const motorResults = results.flatMap((result) => {
-        const metrics = GameMetricsSchema.safeParse(result.metrics);
-        return metrics.success && metrics.data.mode === 'MOTOR_GRIP' ? [metrics.data] : [];
-      });
-      let level = 0;
-      while (level < progression.length - 1) {
-        const currentFruit = progression[level]!;
-        const recent = motorResults
-          .filter((metrics) => metrics.fruitVariant === currentFruit)
-          .slice(0, 3);
-        if (recent.filter((metrics) => metrics.targetCompleted).length < 2) break;
-        level += 1;
-      }
-      const fruitVariant = progression[level]!;
+      const progression = replayMotorGripProgression(
+        results.flatMap((result) => {
+          const event = progressionEvent(result);
+          return event ? [event] : [];
+        }),
+      );
+      const fruitVariant = progression.fruitVariant;
       const motorRule = MotorRuleSchema.parse(ruleConfig);
       config = {
         ...ruleConfig,
