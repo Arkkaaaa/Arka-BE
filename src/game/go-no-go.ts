@@ -177,15 +177,29 @@ function sameAsset(left: ExactAsset | undefined, right: ExactAsset): boolean {
   return left?.stimulus === right.stimulus && left.assetIndex === right.assetIndex;
 }
 
+function matchesTarget(candidate: ExactAsset, target: ExactAsset): boolean {
+  // Exact-image mode for future use:
+  // return sameAsset(candidate, target);
+  return candidate.stimulus === target.stimulus;
+}
+
 function randomAsset(
   cursor: number,
   excluded: readonly ExactAsset[],
+  excludedStimulus?: GoNoGoStimulus,
 ): readonly [ExactAsset, number] {
   const candidates = ALL_ASSETS.filter(
-    (candidate) => !excluded.some((asset) => sameAsset(asset, candidate)),
+    (candidate) =>
+      candidate.stimulus !== excludedStimulus &&
+      !excluded.some((asset) => sameAsset(asset, candidate)),
   );
   const [random, next] = nextRandom(cursor);
   return [candidates[Math.floor(random * candidates.length)]!, next];
+}
+
+function randomTargetVariant(cursor: number, target: ExactAsset): readonly [ExactAsset, number] {
+  const [random, next] = nextRandom(cursor);
+  return [{ stimulus: target.stimulus, assetIndex: Math.floor(random * 4) }, next];
 }
 
 export function generateGoNoGoPlan(seed: number, config: GoNoGoConfig): readonly GoNoGoTrialPlan[] {
@@ -208,7 +222,11 @@ export function generateGoNoGoPlan(seed: number, config: GoNoGoConfig): readonly
               (config.distractorsBeforeTarget.max - config.distractorsBeforeTarget.min + 1),
           );
         for (let index = 0; index < distractorCount; index += 1) {
-          const [distractor, distractorNext] = randomAsset(cursor, [target, ...(previousCandidate ? [previousCandidate] : [])]);
+          const [distractor, distractorNext] = randomAsset(
+            cursor,
+            previousCandidate ? [previousCandidate] : [],
+            target.stimulus,
+          );
           cursor = distractorNext;
           candidates.push({
             candidateIndex: candidates.length,
@@ -219,14 +237,16 @@ export function generateGoNoGoPlan(seed: number, config: GoNoGoConfig): readonly
           });
           previousCandidate = distractor;
         }
+        const [targetVariant, targetNext] = randomTargetVariant(cursor, target);
+        cursor = targetNext;
         candidates.push({
           candidateIndex: candidates.length,
-          stimulus: target.stimulus,
-          assetIndex: target.assetIndex,
-          isTarget: true,
+          stimulus: targetVariant.stimulus,
+          assetIndex: targetVariant.assetIndex,
+          isTarget: matchesTarget(targetVariant, target),
           targetAppearance: appearance as 1 | 2,
         });
-        previousCandidate = target;
+        previousCandidate = targetVariant;
       }
       const index = plan.length;
       plan.push({
@@ -338,8 +358,14 @@ function closeQuestion(
 ): GoNoGoState {
   const question = state.plan[state.currentTrialIndex];
   if (!question) return state;
+  const pressedMatchesTarget = pressedCandidate
+    ? matchesTarget(pressedCandidate, {
+        stimulus: question.targetStimulus,
+        assetIndex: question.targetAssetIndex,
+      })
+    : false;
   const outcome: GoNoGoOutcome = pressedCandidate
-    ? pressedCandidate.isTarget
+    ? pressedMatchesTarget
       ? 'HIT'
       : 'FALSE_POSITIVE'
     : 'MISS';
