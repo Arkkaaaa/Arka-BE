@@ -236,6 +236,7 @@ export class DeviceRealtimeGateway {
 
     socket.on('message', (data, isBinary) => {
       if (closing) return;
+      const receivedAtMs = Date.now();
       processing = processing
         .then(async () => {
           if (closing) return;
@@ -395,6 +396,7 @@ export class DeviceRealtimeGateway {
             connection.family,
             connection.hello.bootId,
             authenticated,
+            receivedAtMs,
           );
           if (decision === 'DUPLICATE' || decision === 'TELEMETRY_DROPPED') return;
           if (decision !== 'ACCEPT') {
@@ -457,7 +459,7 @@ export class DeviceRealtimeGateway {
             return;
           }
           const trustedInput = {
-            receivedAtMs: Date.now(),
+            receivedAtMs,
             connectionId: connection.connectionId,
             bootId: connection.hello.bootId,
             messageId: authenticated.messageId,
@@ -485,7 +487,6 @@ export class DeviceRealtimeGateway {
         })
         .catch((error) => {
           this.dependencies.logger.warn({ err: error }, 'Pesan perangkat gagal diproses');
-          void cleanup('DEVICE_PROCESSING_ERROR').finally(() => socket.terminate());
         });
     });
   }
