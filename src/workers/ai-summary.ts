@@ -6,7 +6,7 @@ import type { Logger } from '../config/logger.js';
 import type { PrismaClient } from '../generated/prisma/client.js';
 
 const INDONESIAN_CUE =
-  /\b(?:adalah|agar|akurasi|atau|baik|belum|buah|cepat|cengkeraman|cukup|dalam|dan|dapat|dengan|di|dari|durasi|genggaman|hasil|ini|juga|karena|ke|kilogram|kinerja|konsisten|lambat|level|lebih|memori|mencapai|menunjukkan|milidetik|performa|permainan|perlu|pada|rata-rata|reaksi|respons|ringkasan|sesi|skor|stabil|stimulus|sudah|target|tercatat|tidak|tingkat|untuk|waktu|yang)\b/iu;
+  /\b(?:adalah|agar|akurasi|atau|baik|belum|buah|cepat|cengkeraman|cukup|dalam|dan|dapat|dengan|di|dari|durasi|genggaman|hasil|ini|jeda|juga|karena|ke|kilogram|kinerja|konsisten|lambat|level|lebih|maksimum|memori|mencapai|menunjukkan|metrik|milidetik|nol|penyelesaian|percobaan|performa|permainan|perlu|pada|rata-rata|reaksi|respons|ringkasan|sesi|skor|stabil|stimulus|sudah|target|tercatat|tidak|tingkat|tombol|untuk|waktu|yang)\b/iu;
 const PLAIN_TEXT = /^[\p{L}\p{N} ,.;:!?()%'’-]+$/u;
 const PROHIBITED_SUMMARY_TEXT =
   /(?:<[^>]*>|\[[^\]]*\]\([^)]*\)|(?:https?:\/\/|www\.|\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b)|\b(?:identitas|nama|diagnos\w*|demensia|alzheimer|medis|klinis|terapi|pengobatan|rekomendasi|saran|anjuran|risiko|normal|abnormal|bahaya|sebaiknya|silakan|harus|lakukan|coba|tingkatkan|kurangi|konsultasikan)\b)/iu;
@@ -16,7 +16,7 @@ const METRIC_CUES = {
   GO_NO_GO:
     /\b(?:skor|level|tingkat|durasi stimulus|total stimulus|stimulus target|stimulus non-target|respons tepat|belum merespons|false positive|berhasil menunggu|akurasi|waktu respons)\b/iu,
   SEQUENCE_MEMORY:
-    /\b(?:skor|urutan terpanjang|level selesai|attempt salah|timeout|tombol ganda|waktu respons|jeda antar tombol|alasan selesai)\b/iu,
+    /\b(?:skor|urutan terpanjang|panjang urutan maksimum|level selesai|semua level selesai|tingkatan selesai|jumlah tingkatan|percobaan salah|percobaan kehabisan waktu|tombol ganda|percobaan tombol ganda|waktu respons|respons pertama|jeda antar tombol|durasi per level|durasi per tingkatan|waktu pengerjaan|alasan selesai|penyelesaian sesi)\b/iu,
 } as const;
 
 interface AiSummaryInputSource {
@@ -431,7 +431,7 @@ export class AiSummaryWorker {
         {
           role: 'system',
           content:
-            'Tulis dua ringkasan hasil permainan dalam bahasa Indonesia berdasarkan hanya metrik agregat yang diberikan. Balas JSON ketat sesuai skema dengan participant dan clinician, masing-masing berisi summaryText satu kalimat dan observations paling banyak tiga pengamatan singkat. Semua teks wajib faktual, menyebut angka dan nama metrik yang tersedia, tanpa markdown. Jangan menyebut atau menebak identitas, diagnosis, kondisi medis atau klinis, risiko, terapi, pengobatan, saran, anjuran, atau rekomendasi. Untuk participant gunakan bahasa sederhana, mudah dipahami, dan bernada menyemangati secara netral tanpa instruksi. Untuk clinician gunakan bahasa ringkas dan lebih berfokus pada angka metrik, tetapi tetap nonklinis.',
+            'Tulis dua ringkasan hasil permainan dalam bahasa Indonesia berdasarkan hanya metrik agregat yang diberikan. Balas JSON ketat sesuai skema dengan participant dan clinician, masing-masing berisi summaryText satu kalimat dan observations paling banyak tiga pengamatan singkat. Semua teks wajib faktual, menyebut angka dan nama metrik yang tersedia, tanpa markdown. Jangan menyebut atau menebak identitas, diagnosis, kondisi medis atau klinis, risiko, terapi, pengobatan, saran, anjuran, atau rekomendasi. Untuk participant gunakan bahasa sederhana, mudah dipahami, dan bernada menyemangati secara netral tanpa instruksi. Untuk clinician gunakan bahasa ringkas dan lebih berfokus pada angka metrik, tetapi tetap nonklinis. Semua nama field teknis wajib diterjemahkan ke bahasa Indonesia alami: maxSequenceLength menjadi panjang urutan maksimum, wrongAttempts menjadi percobaan salah, timedOutAttempts menjadi percobaan kehabisan waktu, multiButtonAttempts menjadi percobaan tombol ganda, meanFirstResponseMs menjadi rata-rata respons pertama, meanInterButtonMs menjadi rata-rata jeda antar tombol, dan LEVEL_CAP_REACHED menjadi semua level selesai. Jangan menulis nama field camelCase, snake_case, kode enum, atau istilah motor grip. Setiap summaryText dan setiap item observations wajib secara mandiri memuat sedikitnya satu digit angka; tulis 0 dan jangan menggantinya dengan frasa tidak ada atau nol.',
         },
         {
           role: 'user',
