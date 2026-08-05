@@ -52,7 +52,7 @@ export const DeviceReadinessCodeSchema = z.enum([
 ]);
 
 export const ModeLabel: Readonly<Record<GameMode, string>> = {
-  MOTOR_GRIP: 'Peras Buah',
+  MOTOR_GRIP: 'Peras Jeruk',
   GO_NO_GO: 'Go-No-Go',
   SEQUENCE_MEMORY: 'Ding Dong Dong Nusantara',
 };

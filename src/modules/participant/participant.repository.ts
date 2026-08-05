@@ -96,15 +96,9 @@ export class ParticipantRepository {
         savedSessionsTotal: true,
         participantSummary: true,
         clinicianSummary: true,
+        source: true,
         updatedAt: true,
       },
-    });
-  }
-
-  public activeMotorGripRule(institutionId: string) {
-    return this.prisma.msGameRuleVersion.findFirst({
-      where: { institutionId, mode: 'MOTOR_GRIP', isActive: true, approvedAt: { not: null } },
-      select: { config: true },
     });
   }
 

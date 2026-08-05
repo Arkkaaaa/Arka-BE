@@ -157,7 +157,7 @@ function complete(state: MotorGripState): MotorGripState {
     state.config.targetHoldMs,
     Math.max(state.longestHoldMs, state.currentHoldMs),
   );
-  const targetCompleted = continuousHoldMs >= state.config.targetHoldMs;
+  const targetCompleted = state.peakKilograms >= state.config.targetKilograms;
   const metrics: MotorGripMetrics = {
     mode: 'MOTOR_GRIP',
     fruitVariant: state.config.fruitVariant,
@@ -171,13 +171,10 @@ function complete(state: MotorGripState): MotorGripState {
     sessionElapsedMs: state.activeElapsedMs,
     gripSamples: [...state.gripSamples],
   };
-  const score = clamp(
-    (targetCompleted ? 500 : 0) +
-      Math.floor((continuousHoldMs / state.config.targetHoldMs) * 300) +
-      Math.round(state.peakGripPercent * 2),
-    0,
-    1000,
-  );
+  const referenceKilograms = state.config.targetKilograms;
+  const averageStrength = clamp(metrics.averageKilograms / referenceKilograms, 0, 1);
+  const peakStrength = clamp(metrics.peakKilograms / referenceKilograms, 0, 1);
+  const score = Math.round((averageStrength * 0.7 + peakStrength * 0.3) * 1000);
   return {
     ...state,
     lifecycle: 'COMPLETED',
@@ -222,11 +219,7 @@ function advance(state: MotorGripState, nowMs: number): MotorGripState {
     timeAtOrAboveTargetMs,
     gripSamples,
   };
-  if (
-    next.longestHoldMs >= state.config.targetHoldMs ||
-    next.activeElapsedMs >= state.config.sessionDurationMs
-  )
-    next = complete(next);
+  if (next.activeElapsedMs >= state.config.sessionDurationMs) next = complete(next);
   return next;
 }
 

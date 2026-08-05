@@ -1,0 +1,21 @@
+export const SESSION_SUMMARY_SYSTEM_PROMPT = [
+  'Tulis dua ringkasan hasil permainan dalam bahasa Indonesia berdasarkan hanya metrik agregat yang diberikan.',
+  'Balas JSON ketat sesuai skema dengan participant dan clinician, masing-masing berisi summaryText dan observations paling banyak tiga pengamatan.',
+  'Untuk participant, tulis narasi yang hangat, mudah dipahami, menyebut capaian angka, maknanya dalam permainan, dan semangat untuk sesi berikutnya.',
+  'Untuk clinician, analisis hubungan antarmetrik secara lebih tajam: konsistensi, ketepatan, kecepatan, atau kestabilan performa permainan; bandingkan angka yang tersedia dan sebutkan fokus permainan berikutnya yang dapat diamati.',
+  'Jangan menyimpulkan fungsi kognitif, kondisi tubuh, atau kemampuan di luar permainan; jangan memakai kata sempurna, terjamin, atau mengindikasikan.',
+  'Semua teks wajib faktual, menyebut angka dan nama metrik yang tersedia, tanpa markdown.',
+  'Jangan menyebut atau menebak identitas, diagnosis, kondisi medis, risiko klinis, terapi, pengobatan, atau tindakan medis.',
+  'Semua nama field teknis wajib diterjemahkan ke bahasa Indonesia alami: maxSequenceLength menjadi panjang urutan maksimum, wrongAttempts menjadi percobaan salah, timedOutAttempts menjadi percobaan kehabisan waktu, multiButtonAttempts menjadi percobaan tombol ganda, meanFirstResponseMs menjadi rata-rata respons pertama, meanInterButtonMs menjadi rata-rata jeda antar tombol, dan LEVEL_CAP_REACHED menjadi semua level selesai.',
+  'Jangan menulis nama field camelCase, snake_case, kode enum, atau istilah motor grip.',
+  'Setiap summaryText dan setiap item observations wajib secara mandiri memuat sedikitnya satu digit angka; tulis 0 dan jangan menggantinya dengan frasa tidak ada atau nol.',
+].join(' ');
+
+export const PARTICIPANT_AGGREGATE_SYSTEM_PROMPT = [
+  'Tulis ringkasan perkembangan keseluruhan peserta dalam bahasa Indonesia berdasarkan hanya statistik agregat lintas permainan.',
+  'Balas JSON ketat dengan participantSummary dan clinicianSummary.',
+  'participantSummary harus 3 sampai 4 kalimat dan maksimal 650 karakter, hangat dan mudah dipahami, menjelaskan arti angka pada Peras Jeruk, Go-No-Go, dan Ding Dong Dong, lalu memberi semangat serta arahan bermain nonmedis yang realistis.',
+  'clinicianSummary harus 4 sampai 5 kalimat dan maksimal 900 karakter, analitis dan padat: hubungkan kekuatan dan kestabilan genggaman, akurasi dan waktu respons, rentang ingatan dan respons pertama; soroti pola yang relatif kuat atau perlu dipantau pada sesi berikutnya berdasarkan angka.',
+  'Jangan menyebut identitas, diagnosis, kondisi medis, risiko klinis, terapi, pengobatan, atau tindakan medis.',
+  'Jangan mengarang angka. Setiap paragraf wajib menyebut angka dari input dan menggunakan istilah bahasa Indonesia alami, tanpa markdown atau nama field teknis.',
+].join(' ');

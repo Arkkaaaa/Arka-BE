@@ -2,21 +2,25 @@ import { randomUUID } from 'node:crypto';
 import { GameMetricsSchema, type GameMetrics } from '../schemas/index.js';
 import { z } from 'zod';
 import type { Env } from '../config/env.js';
+import {
+  PARTICIPANT_AGGREGATE_SYSTEM_PROMPT,
+  SESSION_SUMMARY_SYSTEM_PROMPT,
+} from '../config/ai-summary-prompts.js';
 import type { Logger } from '../config/logger.js';
 import type { PrismaClient } from '../generated/prisma/client.js';
 
 const INDONESIAN_CUE =
   /\b(?:adalah|agar|akurasi|atau|baik|belum|buah|cepat|cengkeraman|cukup|dalam|dan|dapat|dengan|di|dari|durasi|genggaman|hasil|ini|jeda|juga|karena|ke|kilogram|kinerja|konsisten|lambat|level|lebih|maksimum|memori|mencapai|menunjukkan|metrik|milidetik|nol|penyelesaian|percobaan|performa|permainan|perlu|pada|rata-rata|reaksi|respons|ringkasan|sesi|skor|stabil|stimulus|sudah|target|tercatat|tidak|tingkat|tombol|untuk|waktu|yang)\b/iu;
-const PLAIN_TEXT = /^[\p{L}\p{N} ,.;:!?()%'’-]+$/u;
+const PLAIN_TEXT = /^[\p{L}\p{N} ,.;:!?()%'’/+-]+$/u;
 const PROHIBITED_SUMMARY_TEXT =
-  /(?:<[^>]*>|\[[^\]]*\]\([^)]*\)|(?:https?:\/\/|www\.|\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b)|\b(?:identitas|nama|diagnos\w*|demensia|alzheimer|medis|klinis|terapi|pengobatan|rekomendasi|saran|anjuran|risiko|normal|abnormal|bahaya|sebaiknya|silakan|harus|lakukan|coba|tingkatkan|kurangi|konsultasikan)\b)/iu;
+  /(?:<[^>]*>|\[[^\]]*\]\([^)]*\)|(?:https?:\/\/|www\.|\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b)|\b(?:identitas|nama|diagnos\w*|demensia|alzheimer|kognitif|mengindikasikan|medis|klinis|sempurna|terjamin|terapi|pengobatan|risiko|normal|abnormal|bahaya|konsultasikan)\b)/iu;
 const METRIC_CUES = {
   MOTOR_GRIP:
     /\b(?:skor|buah|stroberi|tomat|pisang|jeruk|apel|semangka|kilogram|kg|kekuatan puncak|kekuatan cengkeraman|genggaman puncak|genggaman rata-rata|rata-rata genggaman|rata-rata kekuatan|tahanan kontinu|hold kontinu|waktu hold|waktu di atas target|target|waktu permainan)\b/iu,
   GO_NO_GO:
     /\b(?:skor|level|tingkat|durasi stimulus|total stimulus|stimulus target|stimulus non-target|respons tepat|belum merespons|false positive|berhasil menunggu|akurasi|waktu respons)\b/iu,
   SEQUENCE_MEMORY:
-    /\b(?:skor|urutan terpanjang|panjang urutan maksimum|level selesai|semua level selesai|tingkatan selesai|jumlah tingkatan|percobaan salah|percobaan kehabisan waktu|tombol ganda|percobaan tombol ganda|waktu respons|respons pertama|jeda antar tombol|durasi per level|durasi per tingkatan|waktu pengerjaan|alasan selesai|penyelesaian sesi)\b/iu,
+    /\b(?:skor|urutan terpanjang|panjang urutan maksimum|level selesai|semua level selesai|tingkatan selesai|jumlah tingkatan|percobaan salah|percobaan kehabisan waktu|tombol ganda|percobaan tombol ganda|waktu respons|respons pertama|jeda antar tombol|durasi per level|durasi per tingkatan|latensi per level|latensi per tingkatan|waktu pengerjaan|alasan selesai|penyelesaian sesi)\b/iu,
 } as const;
 
 interface AiSummaryInputSource {
@@ -44,18 +48,30 @@ export function buildAiSummaryInput(source: AiSummaryInputSource) {
 }
 
 export function parseGroundedSummaryOutput(mode: GameMetrics['mode'], value: unknown) {
-  const output = SummaryOutputSchema.parse(value);
+  const rawAudience = z.object({ summaryText: z.string(), observations: z.array(z.string()).max(3) }).strict();
+  const raw = z.object({ participant: rawAudience, clinician: rawAudience }).strict().parse(value);
+  const safeObservations = (texts: readonly string[]) => texts
+    .map((text) => limitAtSentence(text, 140))
+    .filter((text) => !PROHIBITED_SUMMARY_TEXT.test(text) && METRIC_CUES[mode].test(text) && /\d/u.test(text));
+  const output = SummaryOutputSchema.parse({
+    participant: {
+      summaryText: limitAtSentence(raw.participant.summaryText, 280),
+      observations: safeObservations(raw.participant.observations),
+    },
+    clinician: {
+      summaryText: limitAtSentence(raw.clinician.summaryText, 280),
+      observations: safeObservations(raw.clinician.observations),
+    },
+  });
   for (const audience of [output.participant, output.clinician]) {
-    for (const text of [audience.summaryText, ...audience.observations]) {
-      if (PROHIBITED_SUMMARY_TEXT.test(text) || !METRIC_CUES[mode].test(text) || !/\d/u.test(text)) {
-        throw new z.ZodError([
-          {
-            code: 'custom',
-            path: [],
-            message: 'Summary text must be nonclinical and grounded in an allowlisted metric',
-          },
-        ]);
-      }
+    if (PROHIBITED_SUMMARY_TEXT.test(audience.summaryText) || !/\d/u.test(audience.summaryText)) {
+      throw new z.ZodError([
+        {
+          code: 'custom',
+          path: [],
+          message: 'Summary text must be nonclinical and grounded in numeric session data',
+        },
+      ]);
     }
   }
   return output;
@@ -90,6 +106,38 @@ const SummaryOutputSchema = z
     clinician: AudienceSummarySchema,
   })
   .strict();
+const AggregateOutputSchema = z.object({
+  participantSummary: plainIndonesianText(700),
+  clinicianSummary: plainIndonesianText(1000),
+}).strict();
+
+function limitAtSentence(value: string, maxLength: number): string {
+  const normalized = value
+    .replace(/\bmengindikasikan\b/giu, 'menunjukkan')
+    .replace(/\bkognitif\b/giu, 'permainan')
+    .replace(/\bsempurna\b/giu, 'tinggi')
+    .replace(/\bterjamin\b/giu, 'tercatat')
+    .replace(/\s+/gu, ' ')
+    .trim();
+  if (normalized.length <= maxLength) return normalized;
+  const shortened = normalized.slice(0, maxLength);
+  const sentenceEnd = Math.max(shortened.lastIndexOf('.'), shortened.lastIndexOf('!'), shortened.lastIndexOf('?'));
+  return (sentenceEnd >= Math.floor(maxLength * 0.55) ? shortened.slice(0, sentenceEnd + 1) : shortened.trimEnd()).trim();
+}
+
+export function parseAggregateSummaryOutput(value: unknown) {
+  const raw = z.object({ participantSummary: z.string(), clinicianSummary: z.string() }).strict().parse(value);
+  const output = AggregateOutputSchema.parse({
+    participantSummary: limitAtSentence(raw.participantSummary, 700),
+    clinicianSummary: limitAtSentence(raw.clinicianSummary, 1000),
+  });
+  for (const text of [output.participantSummary, output.clinicianSummary]) {
+    if (PROHIBITED_SUMMARY_TEXT.test(text) || !/\d/u.test(text)) {
+      throw new z.ZodError([{ code: 'custom', path: [], message: 'Aggregate summary must be nonclinical and grounded in metrics' }]);
+    }
+  }
+  return output;
+}
 
 const OllamaResponseSchema = z.object({ message: z.object({ content: z.string() }) }).passthrough();
 const OpenAiResponseSchema = z
@@ -195,7 +243,11 @@ export class AiSummaryWorker {
       if (this.#stopping) return;
       await this.expireExhaustedLeases();
       const summary = await this.claimNext();
-      if (summary && !this.#stopping) await this.process(summary);
+      if (summary && !this.#stopping) {
+        await this.process(summary);
+        return;
+      }
+      if (!this.#stopping) await this.processParticipantAggregate();
     } catch (error) {
       if (!this.#stopping)
         this.dependencies.logger.error({ err: error }, 'Worker ringkasan AI lokal gagal diproses');
@@ -387,6 +439,90 @@ export class AiSummaryWorker {
     });
   }
 
+  private async processParticipantAggregate(): Promise<void> {
+    const candidate = await this.dependencies.prisma.trParticipantSummary.findFirst({
+      where: { source: { in: ['PENDING', 'DETERMINISTIC'] } },
+      select: { id: true, updatedAt: true, aggregateMetrics: true },
+      orderBy: { updatedAt: 'asc' },
+    });
+    if (!candidate || this.#stopping) return;
+    const claimed = await this.dependencies.prisma.trParticipantSummary.updateMany({
+      where: { id: candidate.id, source: { in: ['PENDING', 'DETERMINISTIC'] }, updatedAt: candidate.updatedAt },
+      data: { source: 'PROCESSING' },
+    });
+    if (claimed.count !== 1) return;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.dependencies.env.OLLAMA_TIMEOUT_MS);
+    timeout.unref();
+    this.#activeRequest = controller;
+    try {
+      const content = await this.requestProvider(
+        [
+          { role: 'system', content: PARTICIPANT_AGGREGATE_SYSTEM_PROMPT },
+          { role: 'user', content: `Statistik agregat lintas permainan: ${JSON.stringify(candidate.aggregateMetrics)}` },
+        ],
+        controller.signal,
+      );
+      const output = parseAggregateSummaryOutput(JSON.parse(content));
+      await this.dependencies.prisma.trParticipantSummary.updateMany({
+        where: { id: candidate.id, source: 'PROCESSING' },
+        data: {
+          participantSummary: output.participantSummary,
+          clinicianSummary: output.clinicianSummary,
+          source: 'AI',
+        },
+      });
+    } catch (error) {
+      if (!this.#stopping) {
+        this.dependencies.logger.warn(
+          {
+            summaryId: candidate.id,
+            provider: this.dependencies.env.OLLAMA_PROVIDER,
+            model: this.dependencies.env.OLLAMA_MODEL,
+            timedOut: error instanceof Error && error.name === 'AbortError',
+          },
+          'Pembuatan ringkasan keseluruhan gagal',
+        );
+        await this.dependencies.prisma.trParticipantSummary.updateMany({
+          where: { id: candidate.id, source: 'PROCESSING' },
+          data: { source: 'FALLBACK' },
+        });
+      }
+    } finally {
+      clearTimeout(timeout);
+      if (this.#activeRequest === controller) this.#activeRequest = null;
+    }
+  }
+
+  private async requestProvider(
+    messages: readonly { readonly role: string; readonly content: string }[],
+    signal: AbortSignal,
+  ): Promise<string> {
+    const { env } = this.dependencies;
+    const openAiCompatible = env.OLLAMA_PROVIDER === 'openai';
+    const response = await fetch(
+      openAiCompatible ? `${env.OLLAMA_BASE_URL}/chat/completions` : `${env.OLLAMA_BASE_URL}/api/chat`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          ...(openAiCompatible ? { authorization: `Bearer ${env.OLLAMA_API_KEY}` } : {}),
+        },
+        signal,
+        body: JSON.stringify(
+          openAiCompatible
+            ? { model: env.OLLAMA_MODEL, messages, temperature: 0.2, response_format: { type: 'json_object' } }
+            : { model: env.OLLAMA_MODEL, stream: false, options: { temperature: 0.2 }, messages },
+        ),
+      },
+    );
+    if (!response.ok) throw new AiProviderHttpError('AI summary request failed');
+    const responseBody: unknown = await response.json();
+    return openAiCompatible
+      ? OpenAiResponseSchema.parse(responseBody).choices[0]!.message.content
+      : OllamaResponseSchema.parse(responseBody).message.content;
+  }
+
   private async generateSummary(
     summary: ClaimedSummary,
     metrics: z.infer<typeof GameMetricsSchema>,
@@ -431,7 +567,7 @@ export class AiSummaryWorker {
         {
           role: 'system',
           content:
-            'Tulis dua ringkasan hasil permainan dalam bahasa Indonesia berdasarkan hanya metrik agregat yang diberikan. Balas JSON ketat sesuai skema dengan participant dan clinician, masing-masing berisi summaryText satu kalimat dan observations paling banyak tiga pengamatan singkat. Semua teks wajib faktual, menyebut angka dan nama metrik yang tersedia, tanpa markdown. Jangan menyebut atau menebak identitas, diagnosis, kondisi medis atau klinis, risiko, terapi, pengobatan, saran, anjuran, atau rekomendasi. Untuk participant gunakan bahasa sederhana, mudah dipahami, dan bernada menyemangati secara netral tanpa instruksi. Untuk clinician gunakan bahasa ringkas dan lebih berfokus pada angka metrik, tetapi tetap nonklinis. Semua nama field teknis wajib diterjemahkan ke bahasa Indonesia alami: maxSequenceLength menjadi panjang urutan maksimum, wrongAttempts menjadi percobaan salah, timedOutAttempts menjadi percobaan kehabisan waktu, multiButtonAttempts menjadi percobaan tombol ganda, meanFirstResponseMs menjadi rata-rata respons pertama, meanInterButtonMs menjadi rata-rata jeda antar tombol, dan LEVEL_CAP_REACHED menjadi semua level selesai. Jangan menulis nama field camelCase, snake_case, kode enum, atau istilah motor grip. Setiap summaryText dan setiap item observations wajib secara mandiri memuat sedikitnya satu digit angka; tulis 0 dan jangan menggantinya dengan frasa tidak ada atau nol.',
+            SESSION_SUMMARY_SYSTEM_PROMPT,
         },
         {
           role: 'user',

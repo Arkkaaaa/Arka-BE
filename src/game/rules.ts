@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { GameMode, Prisma, type PrismaClient } from '../generated/prisma/client.js';
 
 export const GAME_RULE_VERSION = 'mvp-1.4.0';
-const MOTOR_GRIP_RULE_VERSION = 'mvp-1.9.0';
+const MOTOR_GRIP_RULE_VERSION = 'mvp-4.0.0';
 const GO_NO_GO_RULE_VERSION = 'mvp-2.0.0';
 const SEQUENCE_MEMORY_RULE_VERSION = 'mvp-1.7.0';
 const OWNER_PRESENCE_GRACE_MS = 30_000;
@@ -16,23 +16,17 @@ export const GAME_RULES = [
       baselineRaw: 0,
       calibratedMaxRaw: 4095,
       fullScaleKilograms: 120,
-      fruitTargetsKilograms: {
-        STRAWBERRY: 3,
-        TOMATO: 5,
-        BANANA: 8,
-        ORANGE: 11,
-        APPLE: 15,
-        WATERMELON: 20,
-      },
-      targetHoldMs: 5_000,
+      fruitVariant: 'ORANGE',
+      referenceKilograms: 5,
+      targetHoldMs: 30_000,
       sessionDurationMs: 30_000,
       telemetryGapMs: 300,
       ownerPresenceGraceMs: OWNER_PRESENCE_GRACE_MS,
       score: {
         maximum: 1_000,
-        targetCompletedPoints: 500,
-        continuousHoldPoints: 300,
-        peakGripPercentMultiplier: 2,
+        averageStrengthWeight: 0.7,
+        peakStrengthWeight: 0.3,
+        referenceKilograms: 5,
       },
       feedback: { audioIntensity: 'LOW', haptic: 'PULSED_LIGHT', led: 'GREEN' },
     },
@@ -119,14 +113,27 @@ async function ensureRules(
         });
       }
     } else {
-      await transaction.msGameRuleVersion.create({
-        data: {
+      await transaction.msGameRuleVersion.createMany({
+        data: [{
           ...identity,
           config: rule.config,
           isActive: true,
           approvedAt: new Date(),
-        },
+        }],
+        skipDuplicates: true,
       });
+      const created = await transaction.msGameRuleVersion.findUnique({
+        where: { institutionId_mode_version: identity },
+      });
+      if (!created || !isDeepStrictEqual(created.config, rule.config)) {
+        throw new Error(`Immutable game rule version collision for ${institutionId}/${rule.mode}/${rule.version}.`);
+      }
+      if (!created.isActive || created.approvedAt === null) {
+        await transaction.msGameRuleVersion.update({
+          where: { id: created.id },
+          data: { isActive: true, approvedAt: created.approvedAt ?? new Date() },
+        });
+      }
     }
   }
 }

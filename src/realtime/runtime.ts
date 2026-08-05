@@ -15,10 +15,7 @@ import {
 import { Prisma } from '../generated/prisma/client.js';
 import { AppError } from '../middleware/errors.js';
 import { writeAudit } from '../services/audit.js';
-import {
-  deterministicSessionSummary,
-  upsertParticipantSummary,
-} from '../services/participant-summary.js';
+import { upsertParticipantSummary } from '../services/participant-summary.js';
 import {
   acquireDeviceLock,
   clearDeviceOwnership,
@@ -54,10 +51,6 @@ import {
   tickMotorGrip,
   type MotorGripState,
 } from '../game/motor-grip.js';
-import {
-  progressionEvent,
-  replayMotorGripProgression,
-} from '../game/motor-grip-progression.js';
 import {
   createGoNoGo,
   pauseGoNoGo,
@@ -112,7 +105,8 @@ const MotorRuleSchema = z
     baselineRaw: z.literal(0),
     calibratedMaxRaw: z.literal(4095),
     fullScaleKilograms: z.number().positive().max(120),
-    fruitTargetsKilograms: z.record(FruitVariantSchema, z.number().positive().max(120)),
+    fruitVariant: z.literal('ORANGE'),
+    referenceKilograms: z.literal(5),
     targetHoldMs: z.number().int().positive(),
     sessionDurationMs: z.number().int().positive(),
     telemetryGapMs: z.number().int().positive(),
@@ -458,30 +452,11 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     const ruleConfig = parseRule(input.mode, rule.config);
     let config = ruleConfig;
     if (input.mode === 'MOTOR_GRIP') {
-      const results = input.participantReference
-        ? await this.dependencies.prisma.trGameResult.findMany({
-            where: {
-              institutionId: input.institutionId,
-              mode: 'MOTOR_GRIP',
-              session: { status: 'SAVED' },
-              participant: { participantReference: input.participantReference },
-            },
-            select: { sessionId: true, completedAt: true, metrics: true },
-            orderBy: [{ completedAt: 'asc' }, { sessionId: 'asc' }],
-          })
-        : [];
-      const progression = replayMotorGripProgression(
-        results.flatMap((result) => {
-          const event = progressionEvent(result);
-          return event ? [event] : [];
-        }),
-      );
-      const fruitVariant = progression.fruitVariant;
       const motorRule = MotorRuleSchema.parse(ruleConfig);
       config = {
         ...ruleConfig,
-        fruitVariant,
-        targetKilograms: motorRule.fruitTargetsKilograms[fruitVariant],
+        fruitVariant: motorRule.fruitVariant,
+        targetKilograms: motorRule.referenceKilograms,
       };
     }
     const activePreparation = await this.dependencies.prisma.trGamePreparation.findFirst({
@@ -1715,19 +1690,17 @@ export class AuthoritativeRuntime implements RuntimeGateway {
             });
           }
         }
-        const metrics = GameMetricsSchema.parse(payload.metrics);
-        const fallback = deterministicSessionSummary(metrics, payload.score);
+        GameMetricsSchema.parse(payload.metrics);
         await tx.trAiSessionSummary.upsert({
           where: { sessionId: session.id },
-          create: {
-            sessionId: session.id,
-            status: 'PENDING',
-            summaryText: fallback.participant.summaryText,
-            observations: fallback,
-          },
+          create: { sessionId: session.id, status: 'PENDING' },
           update: {
-            summaryText: fallback.participant.summaryText,
-            observations: fallback,
+            status: 'PENDING',
+            attemptCount: 0,
+            availableAt: new Date(),
+            summaryText: null,
+            observations: Prisma.JsonNull,
+            unavailableReason: null,
           },
         });
         if (session.participantId)
@@ -2269,15 +2242,11 @@ export class AuthoritativeRuntime implements RuntimeGateway {
       observations: Prisma.JsonValue | null;
     } | null;
   }): GameSessionDto {
-    const fallback = session.result
-      ? deterministicSessionSummary(GameMetricsSchema.parse(session.result.metrics), session.result.score)
-      : null;
-    const aiSummary = fallback
+    const aiSummary = session.result
       ? mapStoredAiSummary(
           session.aiSummary?.status,
           session.aiSummary?.summaryText,
           session.aiSummary?.observations,
-          fallback,
         )
       : null;
     return GameSessionDtoSchema.parse({
