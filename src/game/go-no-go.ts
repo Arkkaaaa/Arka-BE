@@ -93,12 +93,14 @@ export interface GoNoGoState {
   readonly currentTrialIndex: number;
   readonly currentCandidateIndex: number;
   readonly questionStartedAtMs: number;
+  readonly questionTransitionEndsAtMs: number;
   readonly targetPreviewEndsAtMs: number;
   readonly candidateStartedAtMs: number;
   readonly responseClosesAtMs: number;
   readonly outOfWindowPresses: number;
   readonly activeElapsedMs: number;
   readonly lastNowMs: number;
+  readonly pauseQuestionTransitionEndsInMs: number | null;
   readonly pauseCandidateStartsInMs: number | null;
   readonly pauseRemainingMs: number | null;
   readonly pauseTargetPreviewEndsInMs: number | null;
@@ -141,6 +143,7 @@ interface ExactAsset {
 }
 
 const LEGACY_MAX_SESSION_MS = 180_000;
+const NEXT_QUESTION_TRANSITION_MS = 1_000;
 const ALL_ASSETS: readonly ExactAsset[] = GO_NO_GO_STIMULI.flatMap((stimulus) =>
   Array.from({ length: 4 }, (_, assetIndex) => ({ stimulus, assetIndex })),
 );
@@ -246,11 +249,13 @@ export function generateGoNoGoPlan(seed: number, config: GoNoGoConfig): readonly
   return plan;
 }
 
-function questionTiming(config: GoNoGoConfig, question: GoNoGoTrialPlan, startsAtMs: number) {
-  const targetPreviewEndsAtMs = startsAtMs + config.targetPreviewDurationMs;
+function questionTiming(config: GoNoGoConfig, question: GoNoGoTrialPlan, startsAtMs: number, withTransition = false) {
+  const questionTransitionEndsAtMs = startsAtMs + (withTransition ? NEXT_QUESTION_TRANSITION_MS : 0);
+  const targetPreviewEndsAtMs = questionTransitionEndsAtMs + config.targetPreviewDurationMs;
   const candidateStartedAtMs = targetPreviewEndsAtMs + config.transitionDurationMs;
   return {
     questionStartedAtMs: startsAtMs,
+    questionTransitionEndsAtMs,
     targetPreviewEndsAtMs,
     candidateStartedAtMs,
     responseClosesAtMs: candidateStartedAtMs + question.stimulusDurationMs,
@@ -275,6 +280,7 @@ export function createGoNoGo(config: GoNoGoConfig, seed: number, nowMs: number):
     outOfWindowPresses: 0,
     activeElapsedMs: 0,
     lastNowMs: nowMs,
+    pauseQuestionTransitionEndsInMs: null,
     pauseCandidateStartsInMs: null,
     pauseRemainingMs: null,
     pauseTargetPreviewEndsInMs: null,
@@ -377,7 +383,7 @@ function closeQuestion(
     ...state,
     currentTrialIndex,
     currentCandidateIndex: 0,
-    ...questionTiming(state.config, state.plan[currentTrialIndex]!, closedAtMs),
+    ...questionTiming(state.config, state.plan[currentTrialIndex]!, closedAtMs, true),
     trials,
   };
 }
@@ -416,8 +422,11 @@ function advance(state: GoNoGoState, nowMs: number): GoNoGoState {
 function transition(state: GoNoGoState, acceptedPress: boolean): GoNoGoTransition {
   const question = state.plan[state.currentTrialIndex] ?? state.plan.at(-1)!;
   const candidate = question.candidates[state.currentCandidateIndex] ?? question.candidates.at(-1)!;
+  const questionTransitionActive =
+    state.lifecycle !== 'COMPLETED' && state.currentTrialIndex > 0 && state.lastNowMs < state.questionTransitionEndsAtMs;
   const previewActive =
     state.lifecycle !== 'COMPLETED' &&
+    !questionTransitionActive &&
     (state.lifecycle === 'PAUSED'
       ? (state.pauseTargetPreviewEndsInMs ?? 0) > 0
       : state.lastNowMs < state.targetPreviewEndsAtMs);
@@ -427,7 +436,7 @@ function transition(state: GoNoGoState, acceptedPress: boolean): GoNoGoTransitio
     (state.lifecycle === 'PAUSED'
       ? (state.pauseCandidateStartsInMs ?? 0) > 0
       : state.lastNowMs < state.candidateStartedAtMs);
-  const phase = previewActive ? 'TARGET_PREVIEW' : transitionActive ? 'TRANSITION' : 'STIMULUS';
+  const phase = questionTransitionActive || transitionActive ? 'TRANSITION' : previewActive ? 'TARGET_PREVIEW' : 'STIMULUS';
   return {
     state,
     acceptedPress,
@@ -445,8 +454,8 @@ function transition(state: GoNoGoState, acceptedPress: boolean): GoNoGoTransitio
       targetAssetIndex: question.targetAssetIndex,
       stimulus: phase === 'TARGET_PREVIEW' ? question.targetStimulus : phase === 'STIMULUS' ? candidate.stimulus : null,
       assetIndex: phase === 'TARGET_PREVIEW' ? question.targetAssetIndex : phase === 'STIMULUS' ? candidate.assetIndex : null,
-      candidateIndex: phase === 'STIMULUS' ? candidate.candidateIndex : null,
-      candidateNumber: phase === 'STIMULUS' ? candidate.candidateIndex + 1 : null,
+      candidateIndex: phase === 'STIMULUS' || (phase === 'TRANSITION' && !questionTransitionActive) ? candidate.candidateIndex : null,
+      candidateNumber: phase === 'STIMULUS' || (phase === 'TRANSITION' && !questionTransitionActive) ? candidate.candidateIndex + 1 : null,
       targetAppearance: phase === 'STIMULUS' ? candidate.targetAppearance : null,
       phase,
       activeElapsedMs: state.activeElapsedMs,
@@ -484,6 +493,7 @@ export function pauseGoNoGo(state: GoNoGoState, nowMs: number): GoNoGoTransition
     {
       ...next,
       lifecycle: 'PAUSED',
+      pauseQuestionTransitionEndsInMs: next.questionTransitionEndsAtMs - nowMs,
       pauseCandidateStartsInMs: next.candidateStartedAtMs - nowMs,
       pauseRemainingMs: next.responseClosesAtMs - nowMs,
       pauseTargetPreviewEndsInMs: next.targetPreviewEndsAtMs - nowMs,
@@ -496,6 +506,7 @@ export function resumeGoNoGo(state: GoNoGoState, nowMs: number): GoNoGoTransitio
   assertMonotonic(nowMs, state.lastNowMs);
   if (
     state.lifecycle !== 'PAUSED' ||
+    state.pauseQuestionTransitionEndsInMs === null ||
     state.pauseCandidateStartsInMs === null ||
     state.pauseRemainingMs === null ||
     state.pauseTargetPreviewEndsInMs === null
@@ -507,9 +518,11 @@ export function resumeGoNoGo(state: GoNoGoState, nowMs: number): GoNoGoTransitio
       ...state,
       lifecycle: 'PLAYING',
       lastNowMs: nowMs,
+      questionTransitionEndsAtMs: nowMs + state.pauseQuestionTransitionEndsInMs,
       targetPreviewEndsAtMs: nowMs + state.pauseTargetPreviewEndsInMs,
       candidateStartedAtMs: nowMs + state.pauseCandidateStartsInMs,
       responseClosesAtMs: nowMs + state.pauseRemainingMs,
+      pauseQuestionTransitionEndsInMs: null,
       pauseCandidateStartsInMs: null,
       pauseRemainingMs: null,
       pauseTargetPreviewEndsInMs: null,

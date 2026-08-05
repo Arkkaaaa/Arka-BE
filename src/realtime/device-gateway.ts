@@ -43,12 +43,12 @@ import { enforceDeviceSequence } from '../device/sequence.js';
 import type { AuthoritativeRuntime } from './runtime.js';
 import type { RealtimeDependencies } from './types.js';
 
-const CONNECTION_TTL_SECONDS = 15;
+const CONNECTION_TTL_SECONDS = 60;
 
 function connectionKey(family: DeviceFamily): string {
   return `${redisPrefixForFamily(family)}:connection`;
 }
-const COMMAND_POLL_MS = 25;
+const COMMAND_POLL_MS = 100;
 export const DEVICE_READINESS_LOW_BATTERY_PERCENT = 10;
 export const DEVICE_INTERRUPT_LOW_BATTERY_PERCENT = 10;
 const REFRESH_CONNECTION_SCRIPT = `
@@ -500,6 +500,7 @@ export class DeviceRealtimeGateway {
       readDeviceLock(this.dependencies.redis, family),
     ]);
     if (association?.state === 'BOUND' && association.lockId === lock?.lockId) return 'ALLOW';
+    if (association?.state === 'UNBINDING' && association.lockId === lock?.lockId) return 'DROP';
     if (
       type === 'SETUP' &&
       lock?.holderType === 'SESSION' &&

@@ -196,9 +196,9 @@ export class AiSummaryWorker {
       await this.expireExhaustedLeases();
       const summary = await this.claimNext();
       if (summary && !this.#stopping) await this.process(summary);
-    } catch {
+    } catch (error) {
       if (!this.#stopping)
-        this.dependencies.logger.error('Worker ringkasan AI lokal gagal diproses');
+        this.dependencies.logger.error({ err: error }, 'Worker ringkasan AI lokal gagal diproses');
     }
   }
 

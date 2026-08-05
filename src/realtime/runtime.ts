@@ -1162,7 +1162,14 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     const companionPresent = (await this.countCompanionPresence(runtime.sessionId, now)) > 0;
     runtime.deviceBound = boundSession !== null;
     runtime.companionPresent = companionPresent;
-    if (!runtime.deviceBound || !runtime.companionPresent) return;
+    if (!runtime.deviceBound || !runtime.companionPresent) {
+      await this.saveSession(runtime);
+      await this.publishSession(
+        runtime,
+        runtime.deviceBound ? 'Menunggu aplikasi terhubung.' : 'Menunggu perangkat terikat ke sesi.',
+      );
+      return;
+    }
     runtime.status = 'COUNTDOWN';
     runtime.countdownEndsAtMs = now + COUNTDOWN_MS;
     const activationId = randomUUID();
@@ -1565,11 +1572,6 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     });
     this.#nextFinalizationAttempts.set(runtime.sessionId, Date.now());
     if (claimed.count === 1) await this.requestSessionCleanup(runtime.sessionId);
-    const outcome =
-      claimed.count === 1
-        ? await this.persistFinalization(runtime.sessionId)
-        : await this.recoverFinalization(runtime.sessionId);
-    if (outcome) await this.finishFinalization(runtime.sessionId, outcome);
   }
 
   private async recoverFinalization(sessionId: string): Promise<'SAVED' | 'SAVE_FAILED' | null> {

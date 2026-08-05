@@ -106,7 +106,7 @@ const rawEnvSchema = z.object({
     .max(120)
     .regex(/^[A-Za-z0-9_.:/-]+$/u),
   OLLAMA_MODEL_ALLOWLIST: z.string().min(1),
-  OLLAMA_TIMEOUT_MS: positiveInt.max(MAX_TIMER_MS).default(60_000),
+  OLLAMA_TIMEOUT_MS: positiveInt.max(MAX_TIMER_MS).default(120_000),
   OLLAMA_WORKER_INTERVAL_MS: positiveInt.max(MAX_TIMER_MS).default(5_000),
   OLLAMA_LEASE_MS: positiveInt.max(MAX_TIMER_MS).default(30_000),
   OLLAMA_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(3),
