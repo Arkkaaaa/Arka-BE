@@ -185,9 +185,10 @@ export class ParticipantService {
   ): Promise<ParticipantDetailDto> {
     const participant = await this.repository.findByHandle(institutionId, participantHandle);
     if (!participant) throw new AppError(404, 'participant_not_found', 'Peserta tidak ditemukan.');
-    const [modeSummaries, aggregateSummary] = await Promise.all([
+    const [modeSummaries, aggregateSummary, narrativeSummaries] = await Promise.all([
       this.repository.modeSummaries(institutionId, participant.id),
       this.repository.participantSummary(institutionId, participant.id),
+      this.repository.participantModeSummaries(institutionId, participant.id),
     ]);
     return ParticipantDetailDtoSchema.parse({
       ...participantDto(participant),
@@ -209,6 +210,17 @@ export class ParticipantService {
             }
           : null,
         overallMetrics: overallMetrics(summary.mode, summary.results),
+        narrativeSummary: (() => {
+          const narrative = narrativeSummaries.find((item) => item.mode === summary.mode);
+          return narrative
+            ? {
+                participantSummary: narrative.participantSummary,
+                clinicianSummary: narrative.clinicianSummary,
+                source: narrative.source,
+                updatedAt: narrative.updatedAt.toISOString(),
+              }
+            : null;
+        })(),
       })),
     });
   }

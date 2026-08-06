@@ -79,6 +79,7 @@ model MsInstitution {
   sessions     TrGameSession[]
   results      TrGameResult[]
   participantSummaries TrParticipantSummary[]
+  participantModeSummaries TrParticipantModeSummary[]
   audits       TrAuditLog[]
 
   @@index([status])
@@ -161,6 +162,7 @@ model MsParticipant {
   sessions             TrGameSession[]
   results              TrGameResult[]
   summary              TrParticipantSummary?
+  modeSummaries        TrParticipantModeSummary[]
 
   @@unique([institutionId, participantReference])
   @@unique([id, institutionId], map: "MsParticipant_tenant_identity_key")
@@ -340,6 +342,29 @@ model TrParticipantSummary {
   @@index([institutionId, updatedAt])
 }
 
+model TrParticipantModeSummary {
+  id                 String        @id @default(uuid()) @db.Uuid
+  participantId      String        @db.Uuid
+  participant        MsParticipant @relation(fields: [participantId, institutionId], references: [id, institutionId], onDelete: Cascade)
+  institutionId      String        @db.Uuid
+  institution        MsInstitution @relation(fields: [institutionId], references: [id], onDelete: Restrict)
+  mode               GameMode
+  aggregateMetrics   Json
+  participantSummary String        @default("") @db.VarChar(700)
+  clinicianSummary   String        @default("") @db.VarChar(1000)
+  source             String        @default("PENDING") @db.VarChar(32)
+  attemptCount       Int           @default(0)
+  leaseToken         String?       @db.Uuid
+  leaseExpiresAt     DateTime?
+  availableAt        DateTime      @default(now())
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+
+  @@unique([participantId, mode])
+  @@index([institutionId, mode, updatedAt])
+  @@index([source, availableAt, leaseExpiresAt])
+}
+
 model TrAiSessionSummary {
   id                String          @id @default(uuid()) @db.Uuid
   sessionId         String          @unique @db.Uuid
@@ -349,7 +374,7 @@ model TrAiSessionSummary {
   leaseToken        String?         @db.Uuid
   leaseExpiresAt    DateTime?
   availableAt       DateTime        @default(now())
-  summaryText       String?         @db.VarChar(280)
+  summaryText       String?         @db.VarChar(700)
   observations      Json?
   unavailableReason String?         @db.VarChar(80)
   createdAt         DateTime        @default(now())

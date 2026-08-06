@@ -154,6 +154,12 @@ export const ParticipantModeSummaryDtoSchema = z.object({
     gameRuleVersion: z.string().max(80),
   }).nullable(),
   overallMetrics: ParticipantOverallMetricsSchema.nullable(),
+  narrativeSummary: z.object({
+    participantSummary: z.string().max(700),
+    clinicianSummary: z.string().max(1000),
+    source: z.enum(['PENDING', 'PROCESSING', 'AI', 'FALLBACK']),
+    updatedAt: IsoDateSchema,
+  }).nullable(),
 });
 export const ParticipantDetailDtoSchema = ParticipantDtoSchema.extend({
   modeSummaries: z.array(ParticipantModeSummaryDtoSchema).length(3),
@@ -395,7 +401,7 @@ export const GameMetricsSchema = z.discriminatedUnion('mode', [
 ]);
 export type GameMetrics = z.infer<typeof GameMetricsSchema>;
 export const AiAudienceSummarySchema = z.object({
-  summaryText: z.string().max(280),
+  summaryText: z.string().max(700),
   observations: z.array(z.string().max(140)).max(3),
 });
 export const AiSummaryDtoSchema = z.discriminatedUnion('status', [

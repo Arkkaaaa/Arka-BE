@@ -1704,7 +1704,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
           },
         });
         if (session.participantId)
-          await upsertParticipantSummary(tx, session.participantId, session.institutionId);
+          await upsertParticipantSummary(tx, session.participantId, session.institutionId, session.mode);
         const saved = await tx.trGameSession.updateMany({
           where: { id: session.id, status: 'SAVING', finalizationLeaseToken: leaseToken },
           data: {

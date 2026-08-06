@@ -4,6 +4,7 @@ import { z } from 'zod';
 import type { Env } from '../config/env.js';
 import {
   PARTICIPANT_AGGREGATE_SYSTEM_PROMPT,
+  PARTICIPANT_MODE_SYSTEM_PROMPT,
   SESSION_SUMMARY_SYSTEM_PROMPT,
 } from '../config/ai-summary-prompts.js';
 import type { Logger } from '../config/logger.js';
@@ -48,18 +49,19 @@ export function buildAiSummaryInput(source: AiSummaryInputSource) {
 }
 
 export function parseGroundedSummaryOutput(mode: GameMetrics['mode'], value: unknown) {
-  const rawAudience = z.object({ summaryText: z.string(), observations: z.array(z.string()).max(3) }).strict();
-  const raw = z.object({ participant: rawAudience, clinician: rawAudience }).strict().parse(value);
+  const rawAudience = z.object({ summaryText: z.string(), observations: z.array(z.string()) }).passthrough();
+  const raw = z.object({ participant: rawAudience, clinician: rawAudience }).passthrough().parse(value);
   const safeObservations = (texts: readonly string[]) => texts
     .map((text) => limitAtSentence(text, 140))
-    .filter((text) => !PROHIBITED_SUMMARY_TEXT.test(text) && METRIC_CUES[mode].test(text) && /\d/u.test(text));
+    .filter((text) => !PROHIBITED_SUMMARY_TEXT.test(text) && METRIC_CUES[mode].test(text) && /\d/u.test(text))
+    .slice(0, 3);
   const output = SummaryOutputSchema.parse({
     participant: {
-      summaryText: limitAtSentence(raw.participant.summaryText, 280),
+      summaryText: limitAtSentence(raw.participant.summaryText, 650),
       observations: safeObservations(raw.participant.observations),
     },
     clinician: {
-      summaryText: limitAtSentence(raw.clinician.summaryText, 280),
+      summaryText: limitAtSentence(raw.clinician.summaryText, 650),
       observations: safeObservations(raw.clinician.observations),
     },
   });
@@ -95,7 +97,7 @@ function plainIndonesianText(maxLength: number) {
 
 const AudienceSummarySchema = z
   .object({
-    summaryText: plainIndonesianText(280),
+    summaryText: plainIndonesianText(700),
     observations: z.array(plainIndonesianText(140)).max(3),
   })
   .strict();
@@ -113,6 +115,7 @@ const AggregateOutputSchema = z.object({
 
 function limitAtSentence(value: string, maxLength: number): string {
   const normalized = value
+    .replace(/[*_`#]+/gu, '')
     .replace(/\bmengindikasikan\b/giu, 'menunjukkan')
     .replace(/\bkognitif\b/giu, 'permainan')
     .replace(/\bsempurna\b/giu, 'tinggi')
@@ -153,7 +156,7 @@ const AUDIENCE_SUMMARY_FORMAT = {
   additionalProperties: false,
   required: ['summaryText', 'observations'],
   properties: {
-    summaryText: { type: 'string', maxLength: 280 },
+    summaryText: { type: 'string', maxLength: 650 },
     observations: {
       type: 'array',
       maxItems: 3,
@@ -247,7 +250,10 @@ export class AiSummaryWorker {
         await this.process(summary);
         return;
       }
-      if (!this.#stopping) await this.processParticipantAggregate();
+      if (!this.#stopping) {
+        await this.processParticipantModeAggregate();
+        if (!this.#stopping) await this.processParticipantAggregate();
+      }
     } catch (error) {
       if (!this.#stopping)
         this.dependencies.logger.error({ err: error }, 'Worker ringkasan AI lokal gagal diproses');
@@ -274,6 +280,23 @@ export class AiSummaryWorker {
         leaseToken: null,
         leaseExpiresAt: null,
         unavailableReason: 'OLLAMA_REQUEST_FAILED',
+      },
+    });
+    await prisma.trParticipantModeSummary.updateMany({
+      where: {
+        attemptCount: { gte: env.OLLAMA_MAX_ATTEMPTS },
+        OR: [
+          { source: 'PENDING' },
+          {
+            source: 'PROCESSING',
+            OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: now } }],
+          },
+        ],
+      },
+      data: {
+        source: 'FALLBACK',
+        leaseToken: null,
+        leaseExpiresAt: null,
       },
     });
   }
@@ -309,7 +332,7 @@ export class AiSummaryWorker {
           status: 'PROCESSING',
           attemptCount: { increment: 1 },
           leaseToken,
-          leaseExpiresAt: new Date(Date.now() + env.OLLAMA_LEASE_MS),
+          leaseExpiresAt: new Date(Date.now() + Math.max(env.OLLAMA_LEASE_MS, env.OLLAMA_TIMEOUT_MS + env.OLLAMA_WORKER_INTERVAL_MS)),
           unavailableReason: null,
         },
       });
@@ -437,6 +460,97 @@ export class AiSummaryWorker {
             ),
           },
     });
+  }
+
+  private async processParticipantModeAggregate(): Promise<boolean> {
+    const { prisma, env } = this.dependencies;
+    const now = new Date();
+    const eligible = {
+      attemptCount: { lt: env.OLLAMA_MAX_ATTEMPTS },
+      availableAt: { lte: now },
+      OR: [
+        { source: 'PENDING' },
+        { source: 'DETERMINISTIC' },
+        {
+          source: 'PROCESSING',
+          OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: now } }],
+        },
+      ],
+    };
+    const candidate = await prisma.trParticipantModeSummary.findFirst({
+      where: eligible,
+      select: { id: true },
+      orderBy: { updatedAt: 'asc' },
+    });
+    if (!candidate || this.#stopping) return false;
+    const leaseToken = randomUUID();
+    const claimed = await prisma.trParticipantModeSummary.updateMany({
+      where: { id: candidate.id, ...eligible },
+      data: {
+        source: 'PROCESSING',
+        attemptCount: { increment: 1 },
+        leaseToken,
+        leaseExpiresAt: new Date(Date.now() + Math.max(env.OLLAMA_LEASE_MS, env.OLLAMA_TIMEOUT_MS + env.OLLAMA_WORKER_INTERVAL_MS)),
+      },
+    });
+    if (claimed.count !== 1) return true;
+    const loaded = await prisma.trParticipantModeSummary.findFirst({
+      where: { id: candidate.id, source: 'PROCESSING', leaseToken },
+      select: { id: true, attemptCount: true, aggregateMetrics: true },
+    });
+    if (!loaded) return true;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), env.OLLAMA_TIMEOUT_MS);
+    timeout.unref();
+    this.#activeRequest = controller;
+    try {
+      const content = await this.requestProvider(
+        [
+          { role: 'system', content: PARTICIPANT_MODE_SYSTEM_PROMPT },
+          { role: 'user', content: `Statistik agregat satu mode: ${JSON.stringify(loaded.aggregateMetrics)}` },
+        ],
+        controller.signal,
+      );
+      const output = parseAggregateSummaryOutput(JSON.parse(content));
+      await prisma.trParticipantModeSummary.updateMany({
+        where: { id: loaded.id, source: 'PROCESSING', leaseToken, leaseExpiresAt: { gt: new Date() } },
+        data: {
+          participantSummary: output.participantSummary,
+          clinicianSummary: output.clinicianSummary,
+          source: 'AI',
+          leaseToken: null,
+          leaseExpiresAt: null,
+        },
+      });
+    } catch (error) {
+      if (!this.#stopping) {
+        this.dependencies.logger.warn(
+          {
+            summaryId: loaded.id,
+            provider: env.OLLAMA_PROVIDER,
+            model: env.OLLAMA_MODEL,
+            timedOut: error instanceof Error && error.name === 'AbortError',
+          },
+          'Pembuatan ringkasan per mode gagal',
+        );
+        const unavailable = loaded.attemptCount >= env.OLLAMA_MAX_ATTEMPTS;
+        await prisma.trParticipantModeSummary.updateMany({
+          where: { id: loaded.id, source: 'PROCESSING', leaseToken, leaseExpiresAt: { gt: new Date() } },
+          data: unavailable
+            ? { source: 'FALLBACK', leaseToken: null, leaseExpiresAt: null }
+            : {
+                source: 'PENDING',
+                leaseToken: null,
+                leaseExpiresAt: null,
+                availableAt: new Date(Date.now() + retryBackoffMs(loaded.attemptCount, env.OLLAMA_WORKER_INTERVAL_MS)),
+              },
+        });
+      }
+    } finally {
+      clearTimeout(timeout);
+      if (this.#activeRequest === controller) this.#activeRequest = null;
+    }
+    return true;
   }
 
   private async processParticipantAggregate(): Promise<void> {

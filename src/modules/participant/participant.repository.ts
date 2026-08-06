@@ -89,6 +89,19 @@ export class ParticipantRepository {
     });
   }
 
+  public participantModeSummaries(institutionId: string, participantId: string) {
+    return this.prisma.trParticipantModeSummary.findMany({
+      where: { institutionId, participantId },
+      select: {
+        mode: true,
+        participantSummary: true,
+        clinicianSummary: true,
+        source: true,
+        updatedAt: true,
+      },
+    });
+  }
+
   public participantSummary(institutionId: string, participantId: string) {
     return this.prisma.trParticipantSummary.findFirst({
       where: { institutionId, participantId },
