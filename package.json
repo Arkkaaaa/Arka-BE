@@ -7,7 +7,7 @@
     "predev": "prisma generate",
     "dev": "tsx watch --env-file=.env src/server.ts",
     "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && prisma generate && tsc -p tsconfig.json",
-    "start": "node --env-file=.env dist/server.js",
+    "start": "node dist/server.js",
     "start:local": "node --env-file=.env dist/server.js",
     "typecheck": "prisma generate && tsc -p tsconfig.json --noEmit",
     "prisma:generate": "prisma generate",
