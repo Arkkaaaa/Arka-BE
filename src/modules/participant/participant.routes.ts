@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import { asyncHandler } from '../../middleware/errors.js';
+import { rateLimit } from '../../middleware/rate-limit.js';
 import { validateBody, validateParams, validateQuery } from '../../middleware/validate.js';
+import type { RedisClient } from '../../db/redis.js';
 import type { ParticipantController } from './participant.controller.js';
 import {
   CreateParticipantRequestSchema,
@@ -8,11 +10,12 @@ import {
   LeaderboardQuerySchema,
   ParticipantParamsSchema,
   ParticipantSearchQuerySchema,
+  ReportQuerySchema,
   ResolveParticipantRequestSchema,
   UpdateParticipantRequestSchema,
 } from './participant.validation.js';
 
-export function createParticipantRouter(controller: ParticipantController): Router {
+export function createParticipantRouter(controller: ParticipantController, redis: RedisClient): Router {
   const router = Router();
 
   router.get(
@@ -34,6 +37,13 @@ export function createParticipantRouter(controller: ParticipantController): Rout
     '/participants/:participantId',
     validateParams(ParticipantParamsSchema),
     asyncHandler(controller.get),
+  );
+  router.get(
+    '/participants/:participantId/report',
+    validateParams(ParticipantParamsSchema),
+    validateQuery(ReportQuerySchema),
+    rateLimit(redis, { namespace: 'participant-report', limit: 12, windowSeconds: 60 }),
+    asyncHandler(controller.report),
   );
   router.patch(
     '/participants/:participantId',

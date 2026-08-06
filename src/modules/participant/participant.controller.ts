@@ -3,11 +3,13 @@ import {
   HistoryQuerySchema,
   LeaderboardQuerySchema,
   ParticipantSearchQuerySchema,
+  ReportQuerySchema,
   ResolveParticipantRequestSchema,
   UpdateParticipantRequestSchema,
 } from '../../schemas/index.js';
-import type { Request, RequestHandler } from 'express';
+import type { Request, RequestHandler, Response } from 'express';
 import { AppError } from '../../middleware/errors.js';
+import type { PdfReportService, ReportRequestContext } from '../../services/pdf-report.js';
 import type { ParticipantService, ParticipantScope } from './participant.service.js';
 import { ParticipantParamsSchema } from './participant.validation.js';
 
@@ -26,8 +28,31 @@ function participantScope(req: Request): ParticipantScope {
   };
 }
 
+function reportContext(req: Request): ReportRequestContext {
+  const auth = authContext(req);
+  return {
+    institutionId: auth.institutionId,
+    institutionName: auth.institutionName,
+    actorUserId: auth.userId,
+    actorSessionId: auth.sessionId,
+    requestId: req.requestId,
+  };
+}
+
+function sendPdf(res: Response, filename: string, report: Buffer): void {
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Cache-Control', 'private,no-store,max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Content-Length', String(report.length));
+  res.status(200).send(report);
+}
+
 export class ParticipantController {
-  public constructor(private readonly service: ParticipantService) {}
+  public constructor(
+    private readonly service: ParticipantService,
+    private readonly reports: PdfReportService,
+  ) {}
 
   public readonly search: RequestHandler = async (req, res) => {
     const query = ParticipantSearchQuerySchema.parse(req.query);
@@ -56,6 +81,13 @@ export class ParticipantController {
     res.json(
       await this.service.getParticipant(authContext(req).institutionId, params.participantId),
     );
+  };
+
+  public readonly report: RequestHandler = async (req, res) => {
+    const params = ParticipantParamsSchema.parse(req.params);
+    const query = ReportQuerySchema.parse(req.query);
+    const report = await this.reports.participantReport(reportContext(req), params.participantId, query.audience);
+    sendPdf(res, `participant-${params.participantId}.pdf`, report);
   };
 
   public readonly update: RequestHandler = async (req, res) => {

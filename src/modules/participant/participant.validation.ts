@@ -3,6 +3,7 @@ import {
   HistoryQuerySchema,
   LeaderboardQuerySchema,
   ParticipantSearchQuerySchema,
+  ReportQuerySchema,
   ResolveParticipantRequestSchema,
   UpdateParticipantRequestSchema,
 } from '../../schemas/index.js';
@@ -21,6 +22,7 @@ export {
   HistoryQuerySchema,
   LeaderboardQuerySchema,
   ParticipantSearchQuerySchema,
+  ReportQuerySchema,
   ResolveParticipantRequestSchema,
   UpdateParticipantRequestSchema,
 };

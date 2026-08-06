@@ -2,9 +2,11 @@ import {
   CreateGameSessionResponseSchema,
   GameSessionDtoSchema,
   PreparationDtoSchema,
+  ReportQuerySchema,
 } from '../../schemas/index.js';
-import type { Request, RequestHandler } from 'express';
+import type { Request, RequestHandler, Response } from 'express';
 import { AppError } from '../../middleware/errors.js';
+import type { PdfReportService, ReportRequestContext } from '../../services/pdf-report.js';
 import type { GameRequestContext, GameService } from './game.service.js';
 import {
   parseIdempotencyKey,
@@ -35,8 +37,31 @@ function sessionId(req: Request): string {
   return req.params['sessionId'] as string;
 }
 
+function reportContext(req: Request): ReportRequestContext {
+  const auth = authenticatedContext(req);
+  return {
+    institutionId: auth.institutionId,
+    institutionName: auth.institutionName,
+    actorUserId: auth.userId,
+    actorSessionId: auth.sessionId,
+    requestId: req.requestId,
+  };
+}
+
+function sendPdf(res: Response, filename: string, report: Buffer): void {
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Cache-Control', 'private,no-store,max-age=0');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Content-Length', String(report.length));
+  res.status(200).send(report);
+}
+
 export class GameController {
-  constructor(private readonly service: GameService) {}
+  constructor(
+    private readonly service: GameService,
+    private readonly reports: PdfReportService,
+  ) {}
 
   readonly openPreparation: RequestHandler = async (req, res) => {
     const preparation = await this.service.openPreparation(
@@ -77,5 +102,12 @@ export class GameController {
     const auth = authenticatedContext(req);
     const session = await this.service.getSession(auth.institutionId, sessionId(req));
     res.json(GameSessionDtoSchema.parse(session));
+  };
+
+  readonly report: RequestHandler = async (req, res) => {
+    const query = ReportQuerySchema.parse(req.query);
+    const id = sessionId(req);
+    const report = await this.reports.sessionReport(reportContext(req), id, query.audience);
+    sendPdf(res, `session-${id}.pdf`, report);
   };
 }

@@ -19,6 +19,16 @@ const body = (schema: OpenApiObject, example?: unknown): OpenApiObject => ({
   required: true,
   ...jsonContent(schema, example),
 });
+const pdfSuccess = (description: string): OpenApiObject => ({
+  description,
+  headers: {
+    'Content-Disposition': { schema: { type: 'string' } },
+    'Content-Length': { schema: { type: 'integer' } },
+  },
+  content: {
+    'application/pdf': { schema: { type: 'string', format: 'binary' } },
+  },
+});
 
 const security = [{ sessionCookie: [] }];
 const standardErrors = {
@@ -311,6 +321,20 @@ export const arkaOpenApi = {
         },
       },
     },
+    '/api/v1/participants/{participantId}/report': {
+      get: {
+        tags: ['Participants'],
+        summary: 'Download a participant PDF report',
+        operationId: 'downloadParticipantReport',
+        security,
+        parameters: [parameterRef('ParticipantId'), parameterRef('ReportAudience')],
+        responses: {
+          '200': pdfSuccess('Participant report.'),
+          ...institutionErrors,
+          '404': responseRef('NotFound'),
+        },
+      },
+    },
     '/api/v1/participants/{participantId}/sessions': {
       get: {
         tags: ['Participants'],
@@ -445,6 +469,21 @@ export const arkaOpenApi = {
         },
       },
     },
+    '/api/v1/game-sessions/{sessionId}/report': {
+      get: {
+        tags: ['Games'],
+        summary: 'Download a saved game session PDF report',
+        operationId: 'downloadGameSessionReport',
+        security,
+        parameters: [parameterRef('SessionId'), parameterRef('ReportAudience')],
+        responses: {
+          '200': pdfSuccess('Game session report.'),
+          ...institutionErrors,
+          '404': responseRef('NotFound'),
+          '409': responseRef('Conflict'),
+        },
+      },
+    },
     '/api/v1/game-sessions/{sessionId}': {
       get: {
         tags: ['Games'],
@@ -506,6 +545,12 @@ export const arkaOpenApi = {
         required: true,
         schema: { type: 'string', format: 'uuid' },
         example: sessionId,
+      },
+      ReportAudience: {
+        name: 'audience',
+        in: 'query',
+        required: true,
+        schema: { type: 'string', enum: ['participant', 'clinician'] },
       },
       HistoryMode: {
         name: 'mode',

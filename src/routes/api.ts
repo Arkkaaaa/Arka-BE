@@ -34,6 +34,7 @@ import {
 } from '../modules/profile/index.js';
 import type { RuntimeGateway } from '../realtime/index.js';
 import { writeAudit } from '../services/audit.js';
+import { PdfReportService } from '../services/pdf-report.js';
 
 export interface ApiRouterDependencies {
   readonly prisma: PrismaClient;
@@ -46,12 +47,21 @@ export function createApiRouter(dependencies: ApiRouterDependencies): Router {
   const router = Router();
 
   const authController = new AuthController(dependencies.env.BETTER_AUTH_SECRET, dependencies.prisma);
-  const participantController = new ParticipantController(
-    new ParticipantService(
-      new ParticipantRepository(dependencies.prisma),
-      dependencies.env.BETTER_AUTH_SECRET,
-    ),
+  const participantService = new ParticipantService(
+    new ParticipantRepository(dependencies.prisma),
+    dependencies.env.BETTER_AUTH_SECRET,
   );
+  const gameService = new GameService(
+    new GameRepository(dependencies.prisma),
+    dependencies.runtime,
+    (context, event) => writeAudit(dependencies.prisma, context, event),
+  );
+  const pdfReportService = new PdfReportService(
+    participantService,
+    gameService,
+    (context, event) => writeAudit(dependencies.prisma, context, event),
+  );
+  const participantController = new ParticipantController(participantService, pdfReportService);
   const profileController = new ProfileController(
     new ProfileService(new ProfileRepository(dependencies.prisma)),
   );
@@ -60,20 +70,14 @@ export function createApiRouter(dependencies: ApiRouterDependencies): Router {
   const dashboardController = new DashboardController(
     new DashboardService(new DashboardRepository(dependencies.prisma, deviceRepository)),
   );
-  const gameController = new GameController(
-    new GameService(
-      new GameRepository(dependencies.prisma),
-      dependencies.runtime,
-      (context, event) => writeAudit(dependencies.prisma, context, event),
-    ),
-  );
+  const gameController = new GameController(gameService, pdfReportService);
 
   router.use(createAuthRouter(authController));
   router.use(requireInstitution);
   router.use(createProfileRoutes(profileController));
-  router.use(createParticipantRouter(participantController));
+  router.use(createParticipantRouter(participantController, dependencies.redis));
   router.use(createDeviceRoutes(deviceController));
-  router.use(createGameRoutes(gameController));
+  router.use(createGameRoutes(gameController, dependencies.redis));
   router.use(createDashboardRoutes(dashboardController));
   return router;
 }

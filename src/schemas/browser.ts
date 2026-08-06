@@ -172,6 +172,9 @@ export const ParticipantDetailDtoSchema = ParticipantDtoSchema.extend({
   }).nullable(),
 });
 export type ParticipantDetailDto = z.infer<typeof ParticipantDetailDtoSchema>;
+export const ReportAudienceSchema = z.enum(['participant', 'clinician']);
+export type ReportAudience = z.infer<typeof ReportAudienceSchema>;
+export const ReportQuerySchema = z.object({ audience: ReportAudienceSchema }).strict();
 export const ParticipantSearchQuerySchema = z.object({
   query: z.string().trim().max(100).default(''),
 });

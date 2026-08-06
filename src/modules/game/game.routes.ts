@@ -1,6 +1,9 @@
 import { Router } from 'express';
 import { asyncHandler } from '../../middleware/errors.js';
-import { validateBody, validateParams } from '../../middleware/validate.js';
+import { rateLimit } from '../../middleware/rate-limit.js';
+import { validateBody, validateParams, validateQuery } from '../../middleware/validate.js';
+import type { RedisClient } from '../../db/redis.js';
+import { ReportQuerySchema } from '../../schemas/index.js';
 import type { GameController } from './game.controller.js';
 import {
   CreateGameSessionRequestSchema,
@@ -11,7 +14,7 @@ import {
   SessionStatusPatchRequestSchema,
 } from './game.validation.js';
 
-export function createGameRoutes(controller: GameController): Router {
+export function createGameRoutes(controller: GameController, redis: RedisClient): Router {
   const router = Router();
   router.post(
     '/game-preparations',
@@ -34,6 +37,13 @@ export function createGameRoutes(controller: GameController): Router {
     validateParams(SessionParamsSchema),
     validateBody(SessionStatusPatchRequestSchema),
     asyncHandler(controller.commandSession),
+  );
+  router.get(
+    '/game-sessions/:sessionId/report',
+    validateParams(SessionParamsSchema),
+    validateQuery(ReportQuerySchema),
+    rateLimit(redis, { namespace: 'session-report', limit: 12, windowSeconds: 60 }),
+    asyncHandler(controller.report),
   );
   router.get(
     '/game-sessions/:sessionId',
