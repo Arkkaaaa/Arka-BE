@@ -6,6 +6,9 @@ import {
   PARTICIPANT_AGGREGATE_SYSTEM_PROMPT,
   PARTICIPANT_MODE_SYSTEM_PROMPT,
   SESSION_SUMMARY_SYSTEM_PROMPT,
+  participantAggregateUserPrompt,
+  participantModeUserPrompt,
+  sessionSummaryUserPrompt,
 } from '../config/ai-summary-prompts.js';
 import type { Logger } from '../config/logger.js';
 import type { PrismaClient } from '../generated/prisma/client.js';
@@ -507,7 +510,7 @@ export class AiSummaryWorker {
       const content = await this.requestProvider(
         [
           { role: 'system', content: PARTICIPANT_MODE_SYSTEM_PROMPT },
-          { role: 'user', content: `Statistik agregat satu mode: ${JSON.stringify(loaded.aggregateMetrics)}` },
+          { role: 'user', content: participantModeUserPrompt(loaded.aggregateMetrics) },
         ],
         controller.signal,
       );
@@ -573,7 +576,7 @@ export class AiSummaryWorker {
       const content = await this.requestProvider(
         [
           { role: 'system', content: PARTICIPANT_AGGREGATE_SYSTEM_PROMPT },
-          { role: 'user', content: `Statistik agregat lintas permainan: ${JSON.stringify(candidate.aggregateMetrics)}` },
+          { role: 'user', content: participantAggregateUserPrompt(candidate.aggregateMetrics) },
         ],
         controller.signal,
       );
@@ -680,12 +683,11 @@ export class AiSummaryWorker {
       const messages = [
         {
           role: 'system',
-          content:
-            SESSION_SUMMARY_SYSTEM_PROMPT,
+          content: SESSION_SUMMARY_SYSTEM_PROMPT,
         },
         {
           role: 'user',
-          content: `Data agregat sesi: ${JSON.stringify(
+          content: sessionSummaryUserPrompt(
             buildAiSummaryInput({
               mode: summary.session.mode,
               ruleVersion: summary.session.ruleVersion.version,
@@ -693,7 +695,7 @@ export class AiSummaryWorker {
               score: summary.session.result.score,
               metrics,
             }),
-          )}`,
+          ),
         },
       ];
       const openAiCompatible = env.OLLAMA_PROVIDER === 'openai';
