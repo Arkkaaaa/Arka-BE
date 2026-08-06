@@ -111,10 +111,12 @@ const SummaryOutputSchema = z
     clinician: AudienceSummarySchema,
   })
   .strict();
-const AggregateOutputSchema = z.object({
-  participantSummary: plainIndonesianText(700),
-  clinicianSummary: plainIndonesianText(1000),
-}).strict();
+function aggregateOutputSchema(participantMaxLength: number, clinicianMaxLength: number) {
+  return z.object({
+    participantSummary: plainIndonesianText(participantMaxLength),
+    clinicianSummary: plainIndonesianText(clinicianMaxLength),
+  }).strict();
+}
 
 function limitAtSentence(value: string, maxLength: number): string {
   const normalized = value
@@ -131,11 +133,14 @@ function limitAtSentence(value: string, maxLength: number): string {
   return (sentenceEnd >= Math.floor(maxLength * 0.55) ? shortened.slice(0, sentenceEnd + 1) : shortened.trimEnd()).trim();
 }
 
-export function parseAggregateSummaryOutput(value: unknown) {
+export function parseAggregateSummaryOutput(
+  value: unknown,
+  limits: { readonly participant: number; readonly clinician: number } = { participant: 700, clinician: 1000 },
+) {
   const raw = z.object({ participantSummary: z.string(), clinicianSummary: z.string() }).strict().parse(value);
-  const output = AggregateOutputSchema.parse({
-    participantSummary: limitAtSentence(raw.participantSummary, 700),
-    clinicianSummary: limitAtSentence(raw.clinicianSummary, 1000),
+  const output = aggregateOutputSchema(limits.participant, limits.clinician).parse({
+    participantSummary: limitAtSentence(raw.participantSummary, limits.participant),
+    clinicianSummary: limitAtSentence(raw.clinicianSummary, limits.clinician),
   });
   for (const text of [output.participantSummary, output.clinicianSummary]) {
     if (PROHIBITED_SUMMARY_TEXT.test(text) || !/\d/u.test(text)) {
@@ -580,7 +585,7 @@ export class AiSummaryWorker {
         ],
         controller.signal,
       );
-      const output = parseAggregateSummaryOutput(JSON.parse(content));
+      const output = parseAggregateSummaryOutput(JSON.parse(content), { participant: 1200, clinician: 1800 });
       await this.dependencies.prisma.trParticipantSummary.updateMany({
         where: { id: candidate.id, source: 'PROCESSING' },
         data: {

@@ -165,8 +165,8 @@ export const ParticipantDetailDtoSchema = ParticipantDtoSchema.extend({
   modeSummaries: z.array(ParticipantModeSummaryDtoSchema).length(3),
   aggregateSummary: z.object({
     savedSessionsTotal: z.number().int().nonnegative(),
-    participantSummary: z.string().max(700),
-    clinicianSummary: z.string().max(1000),
+    participantSummary: z.string().max(1200),
+    clinicianSummary: z.string().max(1800),
     source: z.enum(['DETERMINISTIC', 'PENDING', 'PROCESSING', 'AI', 'FALLBACK']),
     updatedAt: IsoDateSchema,
   }).nullable(),

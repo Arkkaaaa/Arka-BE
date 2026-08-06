@@ -333,8 +333,8 @@ model TrParticipantSummary {
   institution        MsInstitution @relation(fields: [institutionId], references: [id], onDelete: Restrict)
   savedSessionsTotal Int           @default(0)
   aggregateMetrics   Json
-  participantSummary String        @db.VarChar(700)
-  clinicianSummary   String        @db.VarChar(1000)
+  participantSummary String        @db.VarChar(1200)
+  clinicianSummary   String        @db.VarChar(1800)
   source              String        @default("DETERMINISTIC") @db.VarChar(32)
   createdAt           DateTime      @default(now())
   updatedAt           DateTime      @updatedAt

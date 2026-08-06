@@ -13,9 +13,9 @@ export const AI_SUMMARY_AUDIENCE_PROMPTS = {
   },
   aggregate: {
     participant:
-      'Untuk peserta, isi participantSummary dengan 3 sampai 4 kalimat dan maksimal 650 karakter, hangat dan mudah dipahami, menjelaskan arti angka pada Peras Jeruk, Go-No-Go, dan Ding Dong Dong, lalu memberi semangat serta arahan bermain nonmedis yang realistis.',
+      'Untuk peserta, isi participantSummary dengan 5 sampai 7 kalimat dan maksimal 1200 karakter. Jelaskan capaian Peras Jeruk, Go-No-Go, dan Ding Dong Dong secara berurutan menggunakan angka yang tersedia; terangkan makna setiap capaian dalam konteks permainan, bandingkan pola antarmode secara hati-hati, lalu tutup dengan semangat dan dua fokus bermain berikutnya yang realistis serta nonmedis.',
     doctor:
-      'Untuk dokter, isi clinicianSummary dengan 4 sampai 5 kalimat dan maksimal 900 karakter, analitis dan padat: hubungkan kekuatan dan kestabilan genggaman, akurasi dan waktu respons, rentang ingatan dan respons pertama; soroti pola yang relatif kuat atau perlu dipantau pada sesi berikutnya berdasarkan angka.',
+      'Untuk dokter, isi clinicianSummary dengan 7 sampai 9 kalimat dan maksimal 1800 karakter. Analisis setiap mode secara berurutan: kekuatan serta kestabilan genggaman, akurasi serta waktu respons, kemudian rentang urutan serta respons pertama. Hubungkan skor dengan metrik pendukung, bandingkan pola lintas mode tanpa menyimpulkan kondisi medis, sebutkan keterbatasan data berdasarkan jumlah sesi, lalu tutup dengan fokus pengamatan terukur untuk sesi berikutnya.',
   },
 } as const;
 
@@ -25,7 +25,7 @@ export const SESSION_SUMMARY_SYSTEM_PROMPT = [
   AI_SUMMARY_AUDIENCE_PROMPTS.session.participant,
   AI_SUMMARY_AUDIENCE_PROMPTS.session.doctor,
   'Jangan menyimpulkan fungsi kognitif, kondisi tubuh, atau kemampuan di luar permainan; jangan memakai kata sempurna, terjamin, atau mengindikasikan.',
-  'Semua teks wajib faktual, menyebut angka dan nama metrik yang tersedia, tanpa markdown.',
+  'Semua teks wajib faktual, menyebut angka dan nama metrik yang tersedia, tanpa markdown. Tulis akurasi dengan simbol persen, misalnya akurasi 100%, dan gunakan susunan alami total 10 percobaan; jangan menulis persentase akurasi 100 atau 10 total percobaan.',
   'Jangan menyebut atau menebak identitas, diagnosis, kondisi medis, risiko klinis, terapi, pengobatan, atau tindakan medis.',
   'Semua nama field teknis wajib diterjemahkan ke bahasa Indonesia alami: maxSequenceLength menjadi panjang urutan maksimum, wrongAttempts menjadi percobaan salah, timedOutAttempts menjadi percobaan kehabisan waktu, multiButtonAttempts menjadi percobaan tombol ganda, meanFirstResponseMs menjadi rata-rata respons pertama, meanInterButtonMs menjadi rata-rata jeda antar tombol, dan LEVEL_CAP_REACHED menjadi semua level selesai.',
   'Jangan menulis nama field camelCase, snake_case, kode enum, atau istilah motor grip.',

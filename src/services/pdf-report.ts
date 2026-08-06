@@ -19,12 +19,12 @@ const PAGE = {
   bottom: 76,
 } as const;
 const COLORS = {
-  ink: '#183153',
-  muted: '#667085',
-  faint: '#F4F7FA',
-  border: '#D9E2EC',
-  yellow: '#F9C846',
-  orange: '#F47B20',
+  ink: '#171711',
+  muted: '#625F54',
+  faint: '#FFFDFA',
+  border: '#D9DFEB',
+  yellow: '#F3C642',
+  orange: '#9A5A00',
   green: '#2B8A6E',
   blue: '#2878B5',
   red: '#C94C4C',
@@ -105,6 +105,13 @@ function formatMilliseconds(value: number | null): string {
   return value === null ? 'Tidak tersedia' : `${formatNumber(value, 0)} ms`;
 }
 
+function normalizeSummaryText(value: string): string {
+  return value.replace(
+    /persentase akurasi\s+(\d+(?:[.,]\d+)?)\s+pada\s+(\d+)\s+total percobaan/giu,
+    'akurasi $1% pada total $2 percobaan',
+  );
+}
+
 function drawHeaderAndFooter(document: PDFKit.PDFDocument, header: ReportHeader): void {
   const range = document.bufferedPageRange();
   for (let index = range.start; index < range.start + range.count; index += 1) {
@@ -166,7 +173,8 @@ function bufferDocument(document: PDFKit.PDFDocument): Promise<Buffer> {
 }
 
 function pageTitle(document: PDFKit.PDFDocument, eyebrow: string, title: string, subtitle?: string): void {
-  document.font(FONT_NAMES.extraBold).fontSize(9).fillColor(COLORS.orange).text(eyebrow.toUpperCase());
+  document.x = PAGE.left;
+  document.font(FONT_NAMES.extraBold).fontSize(9).fillColor(COLORS.orange).text(eyebrow.toUpperCase(), { width: document.page.width - PAGE.left - PAGE.right });
   document.moveDown(0.45);
   document.font(FONT_NAMES.extraBold).fontSize(24).fillColor(COLORS.ink).text(title, { lineGap: 1 });
   if (subtitle) {
@@ -177,7 +185,8 @@ function pageTitle(document: PDFKit.PDFDocument, eyebrow: string, title: string,
 }
 
 function sectionTitle(document: PDFKit.PDFDocument, title: string): void {
-  document.font(FONT_NAMES.extraBold).fontSize(13).fillColor(COLORS.ink).text(title);
+  document.x = PAGE.left;
+  document.font(FONT_NAMES.extraBold).fontSize(13).fillColor(COLORS.ink).text(title, { width: document.page.width - PAGE.left - PAGE.right });
   document.moveDown(0.55);
 }
 
@@ -205,12 +214,14 @@ function drawMetricCards(document: PDFKit.PDFDocument, items: readonly MetricIte
     });
   });
   const rows = Math.ceil(items.length / columns);
+  document.x = PAGE.left;
   document.y = startY + rows * cardHeight + Math.max(0, rows - 1) * gap + 18;
 }
 
 function drawNarrative(document: PDFKit.PDFDocument, title: string, narrative: string | null): void {
+  document.x = PAGE.left;
   sectionTitle(document, title);
-  const text = narrative?.trim() || 'Ringkasan belum tersedia.';
+  const text = narrative?.trim() ? normalizeSummaryText(narrative.trim()) : 'Ringkasan belum tersedia.';
   document.font(FONT_NAMES.regular).fontSize(10.5).fillColor(COLORS.ink).text(text, {
     width: document.page.width - PAGE.left - PAGE.right,
     lineGap: 4,
@@ -305,6 +316,36 @@ function sessionMetricItems(metrics: GameMetrics, score: number): MetricItem[] {
   ];
 }
 
+function drawParticipantModeChart(
+  document: PDFKit.PDFDocument,
+  summary: ParticipantDetailDto['modeSummaries'][number],
+): void {
+  const metrics = summary.overallMetrics;
+  if (!metrics) return;
+  if (metrics.mode === 'MOTOR_GRIP') {
+    drawBarChart(document, 'Perbandingan kekuatan rata-rata', [
+      { label: 'Kekuatan rata-rata', value: metrics.averageKilograms, display: `${formatNumber(metrics.averageKilograms)} kg`, color: COLORS.orange },
+      { label: 'Puncak rata-rata', value: metrics.averagePeakKilograms, display: `${formatNumber(metrics.averagePeakKilograms)} kg`, color: COLORS.yellow },
+    ], Math.max(5, metrics.averagePeakKilograms));
+    return;
+  }
+  if (metrics.mode === 'GO_NO_GO') {
+    drawBarChart(document, 'Komposisi respons seluruh permainan', [
+      { label: 'Respons tepat', value: metrics.totalHits + metrics.totalCorrectRejections, display: formatNumber(metrics.totalHits + metrics.totalCorrectRejections, 0), color: COLORS.green },
+      { label: 'Terlewat', value: metrics.totalMisses, display: formatNumber(metrics.totalMisses, 0), color: COLORS.orange },
+      { label: 'Respons keliru', value: metrics.totalFalsePositives, display: formatNumber(metrics.totalFalsePositives, 0), color: COLORS.red },
+    ], Math.max(1, metrics.totalTrials));
+    return;
+  }
+  const latencyItems = metrics.levelLatencies.map((point) => ({
+    label: `Level ${point.level}`,
+    value: point.latencyMs,
+    display: `${formatNumber(point.latencyMs, 0)} ms`,
+    color: COLORS.blue,
+  }));
+  if (latencyItems.length > 0) drawBarChart(document, 'Rata-rata waktu respons per level', latencyItems);
+}
+
 function renderParticipantContent(
   document: PDFKit.PDFDocument,
   participant: ParticipantDetailDto,
@@ -312,10 +353,19 @@ function renderParticipantContent(
 ): void {
   addPage(document);
   pageTitle(document, 'Ringkasan keseluruhan', 'Laporan Perkembangan Peserta', participant.displayName);
+  const scoredModes = participant.modeSummaries.filter((summary) => summary.overallMetrics !== null);
   drawMetricCards(document, participant.modeSummaries.map((summary) => ({
     label: MODE_LABELS[summary.mode],
     value: summary.overallMetrics ? formatNumber(summary.overallMetrics.averageScore, 0) : 'Belum ada',
   })));
+  if (scoredModes.length > 0) {
+    drawBarChart(document, 'Perbandingan skor rata-rata', scoredModes.map((summary) => ({
+      label: MODE_LABELS[summary.mode],
+      value: summary.overallMetrics?.averageScore ?? 0,
+      display: formatNumber(summary.overallMetrics?.averageScore ?? 0, 0),
+      color: summary.mode === 'MOTOR_GRIP' ? COLORS.orange : summary.mode === 'GO_NO_GO' ? COLORS.green : COLORS.blue,
+    })), 1000);
+  }
   drawNarrative(document, 'Ringkasan keseluruhan', participantNarrative(participant, audience));
 
   for (const mode of ['MOTOR_GRIP', 'GO_NO_GO', 'SEQUENCE_MEMORY'] as const) {
@@ -334,7 +384,8 @@ function renderParticipantContent(
       continue;
     }
     drawMetricCards(document, participantModeMetrics(summary));
-    drawNarrative(document, 'Ringkasan permainan', modeNarrative(summary, audience));
+    drawParticipantModeChart(document, summary);
+    drawNarrative(document, `Ringkasan ${MODE_LABELS[mode]}`, modeNarrative(summary, audience));
   }
 }
 
@@ -356,7 +407,7 @@ function drawObservations(document: PDFKit.PDFDocument, observations: readonly s
   }
   for (const observation of observations) {
     document.circle(PAGE.left + 4, document.y + 6, 2.5).fill(COLORS.yellow);
-    document.font(FONT_NAMES.regular).fontSize(10).fillColor(COLORS.ink).text(observation, PAGE.left + 16, document.y, {
+    document.font(FONT_NAMES.regular).fontSize(10).fillColor(COLORS.ink).text(normalizeSummaryText(observation), PAGE.left + 16, document.y, {
       width: document.page.width - PAGE.left - PAGE.right - 16,
       lineGap: 2,
     });
@@ -393,6 +444,7 @@ function drawBarChart(
       ellipsis: true,
     });
   });
+  document.x = PAGE.left;
   document.y = startY + items.length * 52 + 8;
 }
 
