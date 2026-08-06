@@ -1,3 +1,4 @@
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import PDFDocument from 'pdfkit';
 import { AppError } from '../middleware/errors.js';
@@ -25,20 +26,27 @@ const COLORS = {
   border: '#D9DFEB',
   yellow: '#F3C642',
   orange: '#9A5A00',
-  green: '#2B8A6E',
-  blue: '#2878B5',
-  red: '#C94C4C',
+  green: '#399267',
+  blue: '#356FAE',
+  red: '#DC4C3F',
+  grip: '#D67B1F',
+  miss: '#E7B82C',
   white: '#FFFFFF',
 } as const;
 const FONT_FILES = {
   regular: 'nunito-latin-400-normal.woff',
+  semiBold: 'nunito-latin-600-normal.woff',
   bold: 'nunito-latin-700-normal.woff',
   extraBold: 'nunito-latin-800-normal.woff',
+  black: 'nunito-latin-900-normal.woff',
 } as const;
 const FONT_NAMES = {
   regular: 'Nunito',
+  semiBold: 'Nunito SemiBold',
   bold: 'Nunito Bold',
   extraBold: 'Nunito ExtraBold',
+  black: 'Nunito Black',
+  brand: 'DynaPuff Bold',
 } as const;
 const MODE_LABELS: Readonly<Record<GameMode, string>> = {
   MOTOR_GRIP: 'Peras Jeruk',
@@ -63,6 +71,17 @@ function fontPath(file: string): string {
   return fileURLToPath(import.meta.resolve(`@fontsource/nunito/files/${file}`));
 }
 
+function brandFontPath(): string {
+  return fileURLToPath(import.meta.resolve('@fontsource/dynapuff/files/dynapuff-latin-700-normal.woff'));
+}
+
+function logoPath(): string {
+  const moduleDirectory = dirname(fileURLToPath(import.meta.url));
+  return moduleDirectory.endsWith(`${join('dist', 'services')}`)
+    ? join(moduleDirectory, '..', '..', 'src', 'assets', 'arka.png')
+    : join(moduleDirectory, '..', 'assets', 'arka.png');
+}
+
 function createDocument(): PDFKit.PDFDocument {
   const document = new PDFDocument({
     autoFirstPage: false,
@@ -71,8 +90,11 @@ function createDocument(): PDFKit.PDFDocument {
     info: { Title: 'ARKA Report', Author: 'ARKA' },
   });
   document.registerFont(FONT_NAMES.regular, fontPath(FONT_FILES.regular));
+  document.registerFont(FONT_NAMES.semiBold, fontPath(FONT_FILES.semiBold));
   document.registerFont(FONT_NAMES.bold, fontPath(FONT_FILES.bold));
   document.registerFont(FONT_NAMES.extraBold, fontPath(FONT_FILES.extraBold));
+  document.registerFont(FONT_NAMES.black, fontPath(FONT_FILES.black));
+  document.registerFont(FONT_NAMES.brand, brandFontPath());
   return document;
 }
 
@@ -119,44 +141,52 @@ function drawHeaderAndFooter(document: PDFKit.PDFDocument, header: ReportHeader)
     const width = document.page.width;
     const contentWidth = width - PAGE.left - PAGE.right;
     document.save();
-    document.font(FONT_NAMES.extraBold).fontSize(8).fillColor(COLORS.orange).text(
+    document.image(logoPath(), PAGE.left, 20, { fit: [28, 28], align: 'center', valign: 'center' });
+    document.font(FONT_NAMES.brand).fontSize(13).fillColor(COLORS.orange).text(
+      'ARKA',
+      PAGE.left + 32,
+      28,
+      { width: 70, lineBreak: false },
+    );
+    document.font(FONT_NAMES.black).fontSize(8).fillColor(COLORS.orange).text(
       audienceLabel(header.audience),
       PAGE.left,
-      28,
-      { width: contentWidth - 90, lineBreak: false, ellipsis: true },
+      58,
+      { width: contentWidth - 100, characterSpacing: 0.45, lineBreak: false, ellipsis: true },
     );
-    document.font(FONT_NAMES.bold).fontSize(12).fillColor(COLORS.ink).text(
+    document.font(FONT_NAMES.black).fontSize(12).fillColor(COLORS.ink).text(
       header.title,
       PAGE.left,
-      46,
-      { width: contentWidth - 90, lineBreak: false, ellipsis: true },
+      73,
+      { width: contentWidth - 100, lineBreak: false, ellipsis: true },
     );
-    document.font(FONT_NAMES.regular).fontSize(8.5).fillColor(COLORS.muted).text(
+    document.font(FONT_NAMES.black).fontSize(9).fillColor(COLORS.orange).text(
       header.institutionName,
-      PAGE.left,
-      66,
-      { width: contentWidth - 90, lineBreak: false, ellipsis: true },
+      width - PAGE.right - 190,
+      28,
+      { width: 190, align: 'right', lineBreak: false, ellipsis: true },
     );
     document.font(FONT_NAMES.bold).fontSize(8.5).fillColor(COLORS.muted).text(
       `Halaman ${index - range.start + 1} dari ${range.count}`,
-      width - PAGE.right - 86,
-      46,
-      { width: 86, align: 'right', lineBreak: false },
+      width - PAGE.right - 90,
+      73,
+      { width: 90, align: 'right', lineBreak: false },
     );
-    document.moveTo(PAGE.left, 94).lineTo(width - PAGE.right, 94).lineWidth(1).strokeColor(COLORS.border).stroke();
+    document.moveTo(PAGE.left, 100).lineTo(width - PAGE.right, 100).lineWidth(2).strokeColor(COLORS.yellow).stroke();
     const footerRuleY = document.page.height - 51;
-    document.moveTo(PAGE.left, footerRuleY).lineTo(width - PAGE.right, footerRuleY).lineWidth(2).strokeColor(COLORS.yellow).stroke();
-    document.font(FONT_NAMES.extraBold).fontSize(9).fillColor(COLORS.ink).text(
+    document.moveTo(PAGE.left, footerRuleY).lineTo(width - PAGE.right, footerRuleY).lineWidth(3).strokeColor(COLORS.yellow).stroke();
+    document.image(logoPath(), PAGE.left, footerRuleY + 9, { fit: [24, 24], align: 'center', valign: 'center' });
+    document.font(FONT_NAMES.brand).fontSize(11).fillColor(COLORS.orange).text(
       'ARKA',
-      PAGE.left,
-      footerRuleY + 14,
-      { width: 80, height: 12, lineBreak: false },
+      PAGE.left + 28,
+      footerRuleY + 15,
+      { width: 70, height: 14, lineBreak: false },
     );
-    document.font(FONT_NAMES.regular).fontSize(8.5).fillColor(COLORS.muted).text(
+    document.font(FONT_NAMES.black).fontSize(8.5).fillColor(COLORS.orange).text(
       header.institutionName,
       PAGE.left + 100,
-      footerRuleY + 14,
-      { width: contentWidth - 100, height: 12, align: 'right', lineBreak: false, ellipsis: true },
+      footerRuleY + 15,
+      { width: contentWidth - 100, height: 14, align: 'right', lineBreak: false, ellipsis: true },
     );
     document.restore();
   }
@@ -174,20 +204,30 @@ function bufferDocument(document: PDFKit.PDFDocument): Promise<Buffer> {
 
 function pageTitle(document: PDFKit.PDFDocument, eyebrow: string, title: string, subtitle?: string): void {
   document.x = PAGE.left;
-  document.font(FONT_NAMES.extraBold).fontSize(9).fillColor(COLORS.orange).text(eyebrow.toUpperCase(), { width: document.page.width - PAGE.left - PAGE.right });
+  document.font(FONT_NAMES.black).fontSize(9).fillColor(COLORS.orange).text(eyebrow.toUpperCase(), { width: document.page.width - PAGE.left - PAGE.right, characterSpacing: 0.7 });
   document.moveDown(0.45);
-  document.font(FONT_NAMES.extraBold).fontSize(24).fillColor(COLORS.ink).text(title, { lineGap: 1 });
+  document.font(FONT_NAMES.black).fontSize(24).fillColor(COLORS.ink).text(title, { lineGap: 1 });
   if (subtitle) {
     document.moveDown(0.35);
-    document.font(FONT_NAMES.regular).fontSize(10).fillColor(COLORS.muted).text(subtitle, { lineGap: 2 });
+    document.font(FONT_NAMES.semiBold).fontSize(10).fillColor(COLORS.muted).text(subtitle, { lineGap: 2 });
   }
   document.moveDown(1.1);
 }
 
 function sectionTitle(document: PDFKit.PDFDocument, title: string): void {
   document.x = PAGE.left;
-  document.font(FONT_NAMES.extraBold).fontSize(13).fillColor(COLORS.ink).text(title, { width: document.page.width - PAGE.left - PAGE.right });
-  document.moveDown(0.55);
+  document.font(FONT_NAMES.black).fontSize(13).fillColor(COLORS.orange).text(title, { width: document.page.width - PAGE.left - PAGE.right });
+  document.moveDown(0.35);
+  document.moveTo(PAGE.left, document.y).lineTo(document.page.width - PAGE.right, document.y).lineWidth(1.5).strokeColor(COLORS.yellow).stroke();
+  document.moveDown(0.65);
+}
+
+function chartTitle(document: PDFKit.PDFDocument, title: string): void {
+  document.x = PAGE.left;
+  document.font(FONT_NAMES.black).fontSize(13).fillColor(COLORS.ink).text(title, {
+    width: document.page.width - PAGE.left - PAGE.right,
+  });
+  document.moveDown(0.7);
 }
 
 function drawMetricCards(document: PDFKit.PDFDocument, items: readonly MetricItem[], columns = 3): void {
@@ -202,12 +242,12 @@ function drawMetricCards(document: PDFKit.PDFDocument, items: readonly MetricIte
     const x = PAGE.left + column * (cardWidth + gap);
     const y = startY + row * (cardHeight + gap);
     document.roundedRect(x, y, cardWidth, cardHeight, 8).fillAndStroke(COLORS.faint, COLORS.border);
-    document.font(FONT_NAMES.regular).fontSize(8).fillColor(COLORS.muted).text(item.label, x + 12, y + 11, {
+    document.font(FONT_NAMES.bold).fontSize(8).fillColor(COLORS.muted).text(item.label, x + 12, y + 11, {
       width: cardWidth - 24,
       lineBreak: false,
       ellipsis: true,
     });
-    document.font(FONT_NAMES.extraBold).fontSize(15).fillColor(COLORS.ink).text(item.value, x + 12, y + 31, {
+    document.font(FONT_NAMES.black).fontSize(15).fillColor(COLORS.ink).text(item.value, x + 12, y + 31, {
       width: cardWidth - 24,
       lineBreak: false,
       ellipsis: true,
@@ -219,13 +259,24 @@ function drawMetricCards(document: PDFKit.PDFDocument, items: readonly MetricIte
 }
 
 function drawNarrative(document: PDFKit.PDFDocument, title: string, narrative: string | null): void {
+  const text = narrative?.trim() ? normalizeSummaryText(narrative.trim()) : 'Ringkasan belum tersedia.';
+  const width = document.page.width - PAGE.left - PAGE.right;
+  const textWidth = width - 36;
+  document.font(FONT_NAMES.bold).fontSize(10.5);
+  const textHeight = document.heightOfString(text, { width: textWidth, lineGap: 4 });
+  const boxHeight = textHeight + 28;
+  if (document.y + 42 + boxHeight > document.page.height - PAGE.bottom) addPage(document);
   document.x = PAGE.left;
   sectionTitle(document, title);
-  const text = narrative?.trim() ? normalizeSummaryText(narrative.trim()) : 'Ringkasan belum tersedia.';
-  document.font(FONT_NAMES.regular).fontSize(10.5).fillColor(COLORS.ink).text(text, {
-    width: document.page.width - PAGE.left - PAGE.right,
+  const boxY = document.y;
+  document.roundedRect(PAGE.left, boxY, width, boxHeight, 8).fill(COLORS.faint);
+  document.rect(PAGE.left, boxY, 6, boxHeight).fill(COLORS.yellow);
+  document.font(FONT_NAMES.bold).fontSize(10.5).fillColor(COLORS.ink).text(text, PAGE.left + 20, boxY + 14, {
+    width: textWidth,
     lineGap: 4,
   });
+  document.x = PAGE.left;
+  document.y = boxY + boxHeight + 12;
 }
 
 function participantNarrative(
@@ -316,6 +367,111 @@ function sessionMetricItems(metrics: GameMetrics, score: number): MetricItem[] {
   ];
 }
 
+function polarPoint(centerX: number, centerY: number, radius: number, angle: number) {
+  const radians = (angle - 90) * Math.PI / 180;
+  return { x: centerX + radius * Math.cos(radians), y: centerY + radius * Math.sin(radians) };
+}
+
+function drawDonutChart(
+  document: PDFKit.PDFDocument,
+  title: string,
+  items: readonly { readonly label: string; readonly value: number; readonly color: string }[],
+  centerLabel: string,
+): void {
+  chartTitle(document, title);
+  const total = items.reduce((sum, item) => sum + item.value, 0);
+  const chartTop = document.y;
+  const centerX = PAGE.left + 92;
+  const centerY = chartTop + 92;
+  const radius = 72;
+  let angle = 0;
+  for (const item of items) {
+    const sweep = total === 0 ? 0 : item.value / total * 360;
+    if (sweep >= 359.999) {
+      document.circle(centerX, centerY, radius).fill(item.color);
+    } else if (sweep > 0) {
+      const start = polarPoint(centerX, centerY, radius, angle);
+      const end = polarPoint(centerX, centerY, radius, angle + sweep);
+      const largeArc = sweep > 180 ? 1 : 0;
+      document.path(`M ${centerX} ${centerY} L ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArc} 1 ${end.x} ${end.y} Z`).fill(item.color);
+    }
+    angle += sweep;
+  }
+  if (total === 0) document.circle(centerX, centerY, radius).fill(COLORS.border);
+  document.circle(centerX, centerY, 48).fill(COLORS.white);
+  document.font(FONT_NAMES.black).fontSize(17).fillColor(COLORS.ink).text(centerLabel, centerX - 45, centerY - 9, {
+    width: 90,
+    align: 'center',
+    lineBreak: false,
+  });
+  const legendX = PAGE.left + 205;
+  items.forEach((item, index) => {
+    const y = chartTop + 24 + index * 42;
+    document.circle(legendX, y + 5, 5).fill(item.color);
+    document.font(FONT_NAMES.bold).fontSize(9).fillColor(COLORS.muted).text(item.label, legendX + 14, y, {
+      width: 150,
+      lineBreak: false,
+      ellipsis: true,
+    });
+    document.font(FONT_NAMES.black).fontSize(11).fillColor(COLORS.ink).text(formatNumber(item.value, 0), legendX + 170, y - 1, {
+      width: 70,
+      align: 'right',
+      lineBreak: false,
+    });
+  });
+  document.x = PAGE.left;
+  document.y = centerY + radius + 26;
+}
+
+function drawLineChart(
+  document: PDFKit.PDFDocument,
+  title: string,
+  points: readonly { readonly label: string; readonly value: number; readonly display: string }[],
+  color: string,
+): void {
+  if (points.length === 0) return;
+  chartTitle(document, title);
+  const chartX = PAGE.left + 42;
+  const chartY = document.y + 22;
+  const chartWidth = document.page.width - PAGE.left - PAGE.right - 58;
+  const chartHeight = 180;
+  const maximum = Math.max(1, ...points.map((point) => point.value)) * 1.15;
+  for (let index = 0; index <= 3; index += 1) {
+    const y = chartY + chartHeight / 3 * index;
+    document.moveTo(chartX, y).lineTo(chartX + chartWidth, y).lineWidth(0.7).strokeColor(COLORS.border).stroke();
+    document.font(FONT_NAMES.semiBold).fontSize(7.5).fillColor(COLORS.muted).text(
+      formatNumber(maximum * (1 - index / 3), 0),
+      PAGE.left,
+      y - 4,
+      { width: 34, align: 'right', lineBreak: false },
+    );
+  }
+  points.forEach((point, index) => {
+    const x = chartX + index / Math.max(points.length - 1, 1) * chartWidth;
+    const y = chartY + chartHeight - point.value / maximum * chartHeight;
+    if (index === 0) document.moveTo(x, y);
+    else document.lineTo(x, y);
+  });
+  if (points.length > 1) document.lineWidth(3).lineCap('round').lineJoin('round').strokeColor(color).stroke();
+  points.forEach((point, index) => {
+    const x = chartX + index / Math.max(points.length - 1, 1) * chartWidth;
+    const y = chartY + chartHeight - point.value / maximum * chartHeight;
+    document.lineWidth(2).circle(x, y, 5).fillAndStroke(COLORS.white, color);
+    document.font(FONT_NAMES.black).fontSize(8).fillColor(COLORS.ink).text(point.display, x - 32, y - 18, {
+      width: 64,
+      align: 'center',
+      lineBreak: false,
+    });
+    document.font(FONT_NAMES.bold).fontSize(8).fillColor(COLORS.muted).text(point.label, x - 32, chartY + chartHeight + 12, {
+      width: 64,
+      align: 'center',
+      lineBreak: false,
+    });
+  });
+  document.x = PAGE.left;
+  document.y = chartY + chartHeight + 42;
+}
+
 function drawParticipantModeChart(
   document: PDFKit.PDFDocument,
   summary: ParticipantDetailDto['modeSummaries'][number],
@@ -330,20 +486,18 @@ function drawParticipantModeChart(
     return;
   }
   if (metrics.mode === 'GO_NO_GO') {
-    drawBarChart(document, 'Komposisi respons seluruh permainan', [
-      { label: 'Respons tepat', value: metrics.totalHits + metrics.totalCorrectRejections, display: formatNumber(metrics.totalHits + metrics.totalCorrectRejections, 0), color: COLORS.green },
-      { label: 'Terlewat', value: metrics.totalMisses, display: formatNumber(metrics.totalMisses, 0), color: COLORS.orange },
-      { label: 'Respons keliru', value: metrics.totalFalsePositives, display: formatNumber(metrics.totalFalsePositives, 0), color: COLORS.red },
-    ], Math.max(1, metrics.totalTrials));
+    drawDonutChart(document, 'Komposisi respons seluruh permainan', [
+      { label: 'Respons tepat', value: metrics.totalHits + metrics.totalCorrectRejections, color: COLORS.green },
+      { label: 'Terlewat', value: metrics.totalMisses, color: COLORS.miss },
+      { label: 'Respons keliru', value: metrics.totalFalsePositives, color: COLORS.red },
+    ], `${formatNumber(metrics.averageAccuracyPercent, 0)}%`);
     return;
   }
-  const latencyItems = metrics.levelLatencies.map((point) => ({
+  drawLineChart(document, 'Rata-rata waktu respons per level', metrics.levelLatencies.map((point) => ({
     label: `Level ${point.level}`,
     value: point.latencyMs,
     display: `${formatNumber(point.latencyMs, 0)} ms`,
-    color: COLORS.blue,
-  }));
-  if (latencyItems.length > 0) drawBarChart(document, 'Rata-rata waktu respons per level', latencyItems);
+  })), COLORS.blue);
 }
 
 function renderParticipantContent(
@@ -421,7 +575,7 @@ function drawBarChart(
   items: readonly { readonly label: string; readonly value: number; readonly display: string; readonly color: string }[],
   maximum?: number,
 ): void {
-  sectionTitle(document, title);
+  chartTitle(document, title);
   const chartX = PAGE.left + 112;
   const chartWidth = document.page.width - PAGE.right - chartX - 54;
   const startY = document.y + 8;
@@ -449,7 +603,7 @@ function drawBarChart(
 }
 
 function drawGripChart(document: PDFKit.PDFDocument, metrics: Extract<GameMetrics, { mode: 'MOTOR_GRIP' }>): void {
-  sectionTitle(document, 'Kekuatan genggam sepanjang sesi');
+  chartTitle(document, 'Kekuatan genggam sepanjang sesi');
   const x = PAGE.left + 34;
   const y = document.y + 16;
   const width = document.page.width - PAGE.left - PAGE.right - 48;
@@ -476,7 +630,7 @@ function drawGripChart(document: PDFKit.PDFDocument, metrics: Extract<GameMetric
       if (index === 0) document.moveTo(pointX, pointY);
       else document.lineTo(pointX, pointY);
     });
-    document.lineWidth(2.5).strokeColor(COLORS.blue).stroke();
+    document.lineWidth(2.5).strokeColor(COLORS.grip).stroke();
   } else {
     const peakHeight = (metrics.peakKilograms / maximum) * height;
     document.roundedRect(x + width / 2 - 36, y + height - peakHeight, 72, peakHeight, 5).fill(COLORS.blue);
@@ -498,22 +652,19 @@ function renderSessionVisual(document: PDFKit.PDFDocument, metrics: GameMetrics)
     return;
   }
   if (metrics.mode === 'GO_NO_GO') {
-    drawBarChart(document, 'Distribusi respons', [
-      { label: 'Tepat sasaran', value: metrics.hits, display: formatNumber(metrics.hits, 0), color: COLORS.green },
-      { label: 'Penolakan tepat', value: metrics.correctRejections, display: formatNumber(metrics.correctRejections, 0), color: COLORS.blue },
-      { label: 'Terlewat', value: metrics.misses, display: formatNumber(metrics.misses, 0), color: COLORS.orange },
-      { label: 'Respons keliru', value: metrics.falsePositives, display: formatNumber(metrics.falsePositives, 0), color: COLORS.red },
-    ], metrics.totalTrials);
+    drawDonutChart(document, 'Distribusi respons', [
+      { label: 'Jawaban benar', value: metrics.hits + metrics.correctRejections, color: COLORS.green },
+      { label: 'Terlewat', value: metrics.misses, color: COLORS.miss },
+      { label: 'Jawaban keliru', value: metrics.falsePositives, color: COLORS.red },
+    ], `${formatNumber(metrics.accuracyPercent, 0)}%`);
     return;
   }
-  const latencyItems = metrics.levelLatencies.map((point) => ({
-    label: `Level ${point.level}`,
-    value: point.latencyMs,
-    display: `${formatNumber(point.latencyMs, 0)} ms`,
-    color: COLORS.blue,
-  }));
-  if (latencyItems.length > 0) {
-    drawBarChart(document, 'Waktu respons per level', latencyItems);
+  if (metrics.levelLatencies.length > 0) {
+    drawLineChart(document, 'Waktu respons per level', metrics.levelLatencies.map((point) => ({
+      label: `Level ${point.level}`,
+      value: point.latencyMs,
+      display: `${formatNumber(point.latencyMs, 0)} ms`,
+    })), COLORS.green);
   } else {
     drawNarrative(document, 'Waktu respons per level', 'Data latensi per level belum tersedia.');
   }
