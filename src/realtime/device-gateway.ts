@@ -43,7 +43,7 @@ import { enforceDeviceSequence } from '../device/sequence.js';
 import type { AuthoritativeRuntime } from './runtime.js';
 import type { RealtimeDependencies } from './types.js';
 
-const CONNECTION_TTL_SECONDS = 60;
+const CONNECTION_TTL_SECONDS = 15;
 
 function connectionKey(family: DeviceFamily): string {
   return `${redisPrefixForFamily(family)}:connection`;
