@@ -143,7 +143,7 @@ interface ExactAsset {
 }
 
 const LEGACY_MAX_SESSION_MS = 180_000;
-const NEXT_QUESTION_TRANSITION_MS = 1_000;
+const NEXT_QUESTION_TRANSITION_MS = 2_600;
 const ALL_ASSETS: readonly ExactAsset[] = GO_NO_GO_STIMULI.flatMap((stimulus) =>
   Array.from({ length: 4 }, (_, assetIndex) => ({ stimulus, assetIndex })),
 );

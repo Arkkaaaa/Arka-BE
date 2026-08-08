@@ -553,8 +553,8 @@ function selectedSessionSummary(
   return { summary: selected.summaryText, observations: selected.observations };
 }
 
-function drawObservations(document: PDFKit.PDFDocument, observations: readonly string[]): void {
-  sectionTitle(document, 'Observasi');
+function drawObservations(document: PDFKit.PDFDocument, observations: readonly string[], title = 'Observasi'): void {
+  sectionTitle(document, title);
   if (observations.length === 0) {
     document.font(FONT_NAMES.regular).fontSize(10.5).fillColor(COLORS.muted).text('Observasi belum tersedia.');
     return;
@@ -686,9 +686,13 @@ function renderSessionContent(
     `${session.displayName} · Disimpan ${formatDate(result.savedAt)}`,
   );
   drawMetricCards(document, sessionMetricItems(result.metrics, result.score));
-  drawNarrative(document, 'Ringkasan sesi', selected.summary);
-  document.moveDown(1.1);
-  drawObservations(document, selected.observations);
+  if (audience === 'participant' && selected.observations.length > 0) {
+    drawObservations(document, selected.observations, 'Poin permainanmu');
+  } else {
+    drawNarrative(document, 'Ringkasan sesi', selected.summary);
+    document.moveDown(1.1);
+    drawObservations(document, selected.observations);
+  }
 
   addPage(document);
   pageTitle(document, 'Visualisasi sesi', MODE_LABELS[session.mode], 'Data tersimpan dari sesi permainan');

@@ -126,13 +126,11 @@ export function decideDeviceHealth(
     ? 'NOT_COMPATIBLE'
     : health.faults.length > 0
       ? 'DEVICE_FAULT'
-      : batteryPercent === null
-        ? 'NOT_READY_BATTERY_UNKNOWN'
-        : batteryPercent <= DEVICE_READINESS_LOW_BATTERY_PERCENT
-          ? 'NOT_READY_LOW_BATTERY'
-          : lockState === 'RELEASING'
-            ? 'CLEANUP_PENDING'
-            : lockState === 'HELD'
+      : batteryPercent !== null && batteryPercent <= DEVICE_READINESS_LOW_BATTERY_PERCENT
+        ? 'NOT_READY_LOW_BATTERY'
+        : lockState === 'RELEASING'
+          ? 'CLEANUP_PENDING'
+          : lockState === 'HELD'
               ? 'RESERVED'
               : 'READY';
   const interruptionReason =

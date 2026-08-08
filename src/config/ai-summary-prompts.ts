@@ -1,7 +1,7 @@
 export const AI_SUMMARY_AUDIENCE_PROMPTS = {
   session: {
     participant:
-      'Untuk peserta, isi participant.summaryText dengan 3 sampai 4 kalimat dan maksimal 600 karakter: tulis narasi yang hangat, mudah dipahami, menyebut capaian angka, menjelaskan maknanya dalam konteks permainan, lalu beri semangat dan fokus bermain berikutnya yang realistis.',
+      'Untuk peserta, jangan menulis paragraf panjang. Isi participant.summaryText dengan satu kalimat pembuka yang singkat, ceria, dan sesuai hasil permainan. Isi participant.observations dengan tepat 3 poin, masing-masing satu kalimat pendek, maksimal 120 karakter, dan menyebut sedikitnya satu angka metrik dari input: poin pertama menyebut capaian utama, poin kedua menjelaskan bagian permainan yang sudah baik, dan poin ketiga memberi ajakan bermain lagi dengan fokus pada satu metrik. Gunakan bahasa sederhana untuk lansia dan boleh memakai perbandingan lucu yang sesuai mode, misalnya genggaman seperti Gatotkaca hanya jika skornya tinggi; jangan berlebihan jika hasilnya masih rendah.',
     doctor:
       'Untuk dokter, isi clinician.summaryText dengan 4 sampai 5 kalimat dan maksimal 650 karakter: analisis hubungan antarmetrik secara lebih tajam, termasuk konsistensi, ketepatan, kecepatan, atau kestabilan performa permainan; bandingkan angka yang tersedia dan sebutkan pola serta fokus permainan berikutnya yang dapat diamati.',
   },

@@ -98,7 +98,13 @@ function plainIndonesianText(maxLength: number) {
     );
 }
 
-const AudienceSummarySchema = z
+const ParticipantSummarySchema = z
+  .object({
+    summaryText: plainIndonesianText(700),
+    observations: z.array(plainIndonesianText(140)).length(3),
+  })
+  .strict();
+const ClinicianSummarySchema = z
   .object({
     summaryText: plainIndonesianText(700),
     observations: z.array(plainIndonesianText(140)).max(3),
@@ -107,8 +113,8 @@ const AudienceSummarySchema = z
 
 const SummaryOutputSchema = z
   .object({
-    participant: AudienceSummarySchema,
-    clinician: AudienceSummarySchema,
+    participant: ParticipantSummarySchema,
+    clinician: ClinicianSummarySchema,
   })
   .strict();
 function aggregateOutputSchema(participantMaxLength: number, clinicianMaxLength: number) {
@@ -159,27 +165,30 @@ const OpenAiResponseSchema = z
   })
   .passthrough();
 
-const AUDIENCE_SUMMARY_FORMAT = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['summaryText', 'observations'],
-  properties: {
-    summaryText: { type: 'string', maxLength: 650 },
-    observations: {
-      type: 'array',
-      maxItems: 3,
-      items: { type: 'string', maxLength: 140 },
+function audienceSummaryFormat(exactlyThreePoints: boolean) {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    required: ['summaryText', 'observations'],
+    properties: {
+      summaryText: { type: 'string', maxLength: 650 },
+      observations: {
+        type: 'array',
+        ...(exactlyThreePoints ? { minItems: 3 } : {}),
+        maxItems: 3,
+        items: { type: 'string', maxLength: 140 },
+      },
     },
-  },
-} as const;
+  } as const;
+}
 
 const SUMMARY_FORMAT = {
   type: 'object',
   additionalProperties: false,
   required: ['participant', 'clinician'],
   properties: {
-    participant: AUDIENCE_SUMMARY_FORMAT,
-    clinician: AUDIENCE_SUMMARY_FORMAT,
+    participant: audienceSummaryFormat(true),
+    clinician: audienceSummaryFormat(false),
   },
 } as const;
 
