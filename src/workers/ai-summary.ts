@@ -101,7 +101,7 @@ function plainIndonesianText(maxLength: number) {
 const ParticipantSummarySchema = z
   .object({
     summaryText: plainIndonesianText(700),
-    observations: z.array(plainIndonesianText(140)).length(3),
+    observations: z.array(plainIndonesianText(140)).max(3),
   })
   .strict();
 const ClinicianSummarySchema = z
