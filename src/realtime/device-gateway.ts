@@ -170,8 +170,34 @@ export class DeviceRealtimeGateway {
     let family: DeviceFamily | null = null;
     let connection: AuthenticatedConnection | null = null;
     let processing = Promise.resolve();
+    let pendingTelemetry: (() => Promise<void>) | null = null;
+    let telemetryProcessing = false;
     let closing = false;
     let cleanupPromise: Promise<void> | null = null;
+
+    const scheduleTelemetry = (task: () => Promise<void>): void => {
+      pendingTelemetry = task;
+      if (telemetryProcessing) return;
+      telemetryProcessing = true;
+      void (async () => {
+        while (!closing && pendingTelemetry) {
+          const next = pendingTelemetry;
+          pendingTelemetry = null;
+          try {
+            await next();
+          } catch (error) {
+            this.dependencies.logger.warn({ err: error }, 'Telemetri perangkat gagal diproses');
+          }
+        }
+      })().finally(() => {
+        telemetryProcessing = false;
+        if (!closing && pendingTelemetry) {
+          const next = pendingTelemetry;
+          pendingTelemetry = null;
+          scheduleTelemetry(next);
+        }
+      });
+    };
 
     const beginClose = (): void => {
       if (closing) return;
@@ -235,8 +261,7 @@ export class DeviceRealtimeGateway {
     socket.on('message', (data, isBinary) => {
       if (closing) return;
       const receivedAtMs = Date.now();
-      processing = processing
-        .then(async () => {
+      const processMessage = async (): Promise<void> => {
           if (closing) return;
           if (isBinary) {
             await cleanup('MALFORMED_DEVICE_INPUT');
@@ -431,7 +456,7 @@ export class DeviceRealtimeGateway {
             return;
           }
           if (authenticated.type === 'device.commandAck') {
-            await this.handleAcknowledgement(connection, authenticated);
+            await this.handleAcknowledgement(connection, authenticated, receivedAtMs);
             return;
           }
           const association =
@@ -468,24 +493,30 @@ export class DeviceRealtimeGateway {
             association.type === 'SETUP'
               ? { setupId: association.id }
               : { sessionId: association.id };
-          if (authenticated.type === 'telemetry.fsr')
-            await this.runtime.handleFsr(
-              connection.family,
-              target,
-              authenticated.payload.fsrRaw,
-              trustedInput,
-            );
-          else
+          if (authenticated.type === 'telemetry.fsr') {
+            const telemetryConnection = connection;
+            scheduleTelemetry(async () => {
+              if (closing) return;
+              await this.runtime.handleFsr(
+                telemetryConnection.family,
+                target,
+                authenticated.payload.fsrRaw,
+                trustedInput,
+              );
+            });
+          } else
             await this.runtime.handleButton(
               connection.family,
               target,
               authenticated.payload.buttonCode,
               trustedInput,
             );
-        })
-        .catch((error) => {
-          this.dependencies.logger.warn({ err: error }, 'Pesan perangkat gagal diproses');
-        });
+      };
+      const handleError = (error: unknown): void => {
+        this.dependencies.logger.warn({ err: error }, 'Pesan perangkat gagal diproses');
+      };
+      if (connection) void processMessage().catch(handleError);
+      else processing = processing.then(processMessage).catch(handleError);
     });
   }
 
@@ -545,6 +576,7 @@ export class DeviceRealtimeGateway {
   private async handleAcknowledgement(
     connection: AuthenticatedConnection,
     message: Extract<AuthenticatedDeviceMessage, { type: 'device.commandAck' }>,
+    receivedAtMs: number,
   ): Promise<void> {
     const associationId = 'setupId' in message ? message.setupId : message.sessionId;
     const associationType = 'setupId' in message ? 'SETUP' : 'SESSION';
@@ -558,6 +590,7 @@ export class DeviceRealtimeGateway {
       connectionId: connection.connectionId,
       bootId: connection.hello.bootId,
       outcome: message.payload.outcome,
+      receivedAtMs,
       ...(message.payload.reason ? { reason: message.payload.reason } : {}),
       ...(message.payload.outcome === 'ACK' && associationType === 'SETUP'
         ? {

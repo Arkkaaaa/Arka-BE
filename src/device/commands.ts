@@ -416,6 +416,7 @@ export async function acknowledgeDeviceCommand(
     readonly connectionId: string;
     readonly bootId: string;
     readonly outcome: 'ACK' | 'NACK';
+    readonly receivedAtMs?: number;
     readonly reason?: string;
     readonly beforeComplete?: (command: DeviceCommand) => Promise<void>;
   },
@@ -437,7 +438,7 @@ export async function acknowledgeDeviceCommand(
     return { command, duplicate: true };
   if (
     command.status !== 'SENT' ||
-    command.lastDispatchedAtMs + COMMAND_ACK_TIMEOUT_MS <= Date.now()
+    command.lastDispatchedAtMs + COMMAND_ACK_TIMEOUT_MS <= (input.receivedAtMs ?? Date.now())
   )
     return null;
   const [association, lock] = await Promise.all([
