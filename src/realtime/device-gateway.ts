@@ -559,6 +559,18 @@ export class DeviceRealtimeGateway {
       bootId: connection.hello.bootId,
       outcome: message.payload.outcome,
       ...(message.payload.reason ? { reason: message.payload.reason } : {}),
+      ...(message.payload.outcome === 'ACK' && associationType === 'SETUP'
+        ? {
+            beforeComplete: async (command) => {
+              if (command.kind === 'SETUP_UNBIND')
+                await this.runtime.handleSetupUnbound(
+                  connection.family,
+                  associationId,
+                  command.commandId,
+                );
+            },
+          }
+        : {}),
     });
     if (!acknowledged) {
       await this.runtime.interruptAssociation(
@@ -591,7 +603,6 @@ export class DeviceRealtimeGateway {
       await this.runtime.handleSetupBound(connection.family, message.setupId);
     } else if (command.kind === 'SETUP_UNBIND' && 'setupId' in message) {
       await deleteDeviceAssociation(this.dependencies.redis, connection.family, 'SETUP', message.setupId);
-      await this.runtime.handleSetupUnbound(connection.family, message.setupId, command.commandId);
     } else if (command.kind === 'SESSION_BIND' && 'sessionId' in message) {
       const updated = await updateDeviceAssociationState(
         this.dependencies.redis,

@@ -105,6 +105,35 @@ redis.call('ZADD', KEYS[3], sequence, command.commandId)
 redis.call('EXPIRE', KEYS[3], ARGV[2])
 return encoded
 `;
+const ENQUEUE_IDEMPOTENT_COMMAND_SCRIPT = `
+local existing = redis.call('GET', KEYS[4])
+if existing then return existing end
+local sequence = redis.call('INCR', KEYS[1])
+local command = cjson.decode(ARGV[1])
+command.sequence = sequence
+local encoded = cjson.encode(command)
+redis.call('SET', KEYS[2], encoded, 'EX', ARGV[2])
+redis.call('ZADD', KEYS[3], sequence, command.commandId)
+redis.call('EXPIRE', KEYS[3], ARGV[2])
+redis.call('SET', KEYS[4], encoded, 'EX', ARGV[2])
+return encoded
+`;
+const MARK_COMMAND_DISPATCHED_SCRIPT = `
+local encoded = redis.call('GET', KEYS[1])
+if not encoded then return nil end
+local command = cjson.decode(encoded)
+local now = tonumber(ARGV[3])
+if command.expiresAtMs <= now or (command.status ~= 'PENDING' and command.status ~= 'SENT') then return nil end
+local sameConnection = command.connectionId == ARGV[1] and command.bootId == ARGV[2]
+if command.status == 'SENT' and sameConnection and now - command.lastDispatchedAtMs < 1000 then return nil end
+command.status = 'SENT'
+command.connectionId = ARGV[1]
+command.bootId = ARGV[2]
+command.lastDispatchedAtMs = now
+local updated = cjson.encode(command)
+redis.call('SET', KEYS[1], updated, 'EX', ARGV[4])
+return updated
+`;
 
 function associationKey(
   family: DeviceFamily,
@@ -116,6 +145,10 @@ function associationKey(
 
 function commandKey(family: DeviceFamily, commandId: string): string {
   return `${redisPrefixForFamily(family)}:command:${commandId}`;
+}
+
+function handoffKey(family: DeviceFamily, commandId: string): string {
+  return `${redisPrefixForFamily(family)}:handoff:${commandId}`;
 }
 
 function decode<T>(encoded: string | null, schema: z.ZodType<T>): T | null {
@@ -297,6 +330,41 @@ export async function enqueueDeviceCommand(
   return CommandSchema.parse(JSON.parse(encoded));
 }
 
+export async function enqueueHandoffDeviceCommand(
+  redis: Redis,
+  family: DeviceFamily,
+  predecessorCommandId: string,
+  input: EnqueueDeviceCommandInput,
+): Promise<DeviceCommand> {
+  const command = CommandSchema.omit({ sequence: true }).parse({
+    commandId: randomUUID(),
+    lockId: input.lockId,
+    associationId: input.associationId,
+    sessionId: input.sessionId ?? null,
+    kind: input.kind,
+    payload: input.payload,
+    expiresAtMs: input.expiresAt.getTime(),
+    status: 'PENDING',
+    connectionId: null,
+    bootId: null,
+    lastDispatchedAtMs: 0,
+    nackReason: null,
+  });
+  const ttlSeconds = Math.max(1, Math.ceil((input.expiresAt.getTime() - Date.now()) / 1_000));
+  const encoded = await redis.eval(
+    ENQUEUE_IDEMPOTENT_COMMAND_SCRIPT,
+    4,
+    commandSequenceKey(family),
+    commandKey(family, command.commandId),
+    commandQueueKey(family),
+    handoffKey(family, predecessorCommandId),
+    JSON.stringify(command),
+    String(Math.max(ttlSeconds, 60)),
+  );
+  if (typeof encoded !== 'string') throw new Error('Perintah handoff perangkat gagal disimpan');
+  return CommandSchema.parse(JSON.parse(encoded));
+}
+
 export async function listDeviceCommands(
   redis: Redis,
   family: DeviceFamily,
@@ -326,22 +394,16 @@ export async function markDeviceCommandDispatched(
   connectionId: string,
   bootId: string,
 ): Promise<DeviceCommand | null> {
-  const current = decode(await redis.get(commandKey(family, command.commandId)), CommandSchema);
-  const now = Date.now();
-  if (!current || current.expiresAtMs <= now || !['PENDING', 'SENT'].includes(current.status))
-    return null;
-  const sameConnection = current.connectionId === connectionId && current.bootId === bootId;
-  if (current.status === 'SENT' && sameConnection && now - current.lastDispatchedAtMs < 1_000)
-    return null;
-  const updated = CommandSchema.parse({
-    ...current,
-    status: 'SENT',
+  const encoded = await redis.eval(
+    MARK_COMMAND_DISPATCHED_SCRIPT,
+    1,
+    commandKey(family, command.commandId),
     connectionId,
     bootId,
-    lastDispatchedAtMs: now,
-  });
-  await redis.set(commandKey(family, updated.commandId), JSON.stringify(updated), 'EX', STATE_TTL_SECONDS);
-  return updated;
+    String(Date.now()),
+    String(STATE_TTL_SECONDS),
+  );
+  return typeof encoded === 'string' ? CommandSchema.parse(JSON.parse(encoded)) : null;
 }
 
 export async function acknowledgeDeviceCommand(
@@ -355,6 +417,7 @@ export async function acknowledgeDeviceCommand(
     readonly bootId: string;
     readonly outcome: 'ACK' | 'NACK';
     readonly reason?: string;
+    readonly beforeComplete?: (command: DeviceCommand) => Promise<void>;
   },
 ): Promise<{ command: DeviceCommand; duplicate: boolean } | null> {
   const command = decode(await redis.get(commandKey(family, input.commandId)), CommandSchema);
@@ -390,6 +453,7 @@ export async function acknowledgeDeviceCommand(
     association.lockId !== command.lockId
   )
     return null;
+  if (input.beforeComplete) await input.beforeComplete(command);
   const updated = CommandSchema.parse({
     ...command,
     status,

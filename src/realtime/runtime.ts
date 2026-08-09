@@ -20,6 +20,7 @@ import {
   acquireDeviceLock,
   clearDeviceOwnership,
   enqueueDeviceCommand,
+  enqueueHandoffDeviceCommand,
   readDeviceAssociation,
   readDeviceLock,
   refreshDeviceLock,
@@ -782,6 +783,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     await enqueueDeviceCommand(this.dependencies.redis, family, {
       lockId: sessionLock.lockId,
       associationId: preparation.setupId,
+      sessionId,
       kind: 'SETUP_UNBIND',
       payload: {},
       expiresAt: bindingDeadlineAt,
@@ -977,7 +979,7 @@ export class AuthoritativeRuntime implements RuntimeGateway {
   async handleSetupUnbound(
     family: DeviceFamily,
     setupId: string,
-    _commandId: string,
+    commandId: string,
   ): Promise<void> {
     const session = await this.dependencies.prisma.trGameSession.findFirst({
       where: { preparation: { setupId }, status: 'BINDING' },
@@ -991,13 +993,22 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     const runtime = await this.loadSession(session.id);
     const lock = await readDeviceLock(this.dependencies.redis, family);
     if (!runtime || !lock || lock.lockId !== runtime.lockId || lock.sessionId !== session.id) return;
-    await writeDeviceAssociation(this.dependencies.redis, family, {
-      lockId: lock.lockId,
-      associationId: session.id,
-      type: 'SESSION',
-      state: 'BINDING',
-    });
-    await enqueueDeviceCommand(this.dependencies.redis, family, {
+    const association = await readDeviceAssociation(
+      this.dependencies.redis,
+      family,
+      'SESSION',
+      session.id,
+    );
+    if (association && association.lockId !== lock.lockId) return;
+    if (association?.state === 'BOUND') return;
+    if (!association)
+      await writeDeviceAssociation(this.dependencies.redis, family, {
+        lockId: lock.lockId,
+        associationId: session.id,
+        type: 'SESSION',
+        state: 'BINDING',
+      });
+    await enqueueHandoffDeviceCommand(this.dependencies.redis, family, commandId, {
       lockId: lock.lockId,
       associationId: session.id,
       sessionId: session.id,
@@ -1101,8 +1112,16 @@ export class AuthoritativeRuntime implements RuntimeGateway {
   ): Promise<void> {
     if (association.setupId) {
       const runtime = await this.loadPreparation(association.setupId);
-      if (runtime && deviceFamilyForMode(runtime.mode) === family)
+      if (runtime && deviceFamilyForMode(runtime.mode) === family) {
         await this.cancelPreparationBySetup(association.setupId, reason);
+      } else {
+        const session = await this.dependencies.prisma.trGameSession.findFirst({
+          where: { preparation: { setupId: association.setupId }, status: 'BINDING' },
+          select: { id: true, mode: true },
+        });
+        if (session && deviceFamilyForMode(session.mode) === family)
+          await this.interruptSession(session.id, reason);
+      }
     }
     if (association.sessionId) {
       const runtime = await this.loadSession(association.sessionId);
