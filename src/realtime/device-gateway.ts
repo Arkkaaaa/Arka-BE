@@ -530,7 +530,11 @@ export class DeviceRealtimeGateway {
       readDeviceLock(this.dependencies.redis, family),
     ]);
     if (association?.state === 'BOUND' && association.lockId === lock?.lockId) return 'ALLOW';
-    if (association?.state === 'UNBINDING' && association.lockId === lock?.lockId) return 'DROP';
+    if (
+      (association?.state === 'BINDING' || association?.state === 'UNBINDING') &&
+      association.lockId === lock?.lockId
+    )
+      return 'DROP';
     if (
       type === 'SETUP' &&
       lock?.holderType === 'SESSION' &&
