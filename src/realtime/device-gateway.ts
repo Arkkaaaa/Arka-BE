@@ -515,8 +515,7 @@ export class DeviceRealtimeGateway {
       const handleError = (error: unknown): void => {
         this.dependencies.logger.warn({ err: error }, 'Pesan perangkat gagal diproses');
       };
-      if (connection) void processMessage().catch(handleError);
-      else processing = processing.then(processMessage).catch(handleError);
+      processing = processing.then(processMessage).catch(handleError);
     });
   }
 
