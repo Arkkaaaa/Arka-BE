@@ -59,7 +59,7 @@ export const GAME_RULES = [
     config: {
       initialSequenceLength: 1,
       maxSequenceLength: 6,
-      exampleItemMs: 900,
+      exampleItemMs: 2_000,
       exampleGapMs: 350,
       initialDelayMs: 1_200,
       responsePromptMs: 2_500,
