@@ -4,7 +4,7 @@ import { GameMode, Prisma, type PrismaClient } from '../generated/prisma/client.
 export const GAME_RULE_VERSION = 'mvp-1.4.0';
 const MOTOR_GRIP_RULE_VERSION = 'mvp-4.1.0';
 const GO_NO_GO_RULE_VERSION = 'mvp-2.0.0';
-const SEQUENCE_MEMORY_RULE_VERSION = 'mvp-1.7.0';
+const SEQUENCE_MEMORY_RULE_VERSION = 'mvp-1.8.0';
 const OWNER_PRESENCE_GRACE_MS = 30_000;
 
 export const GAME_RULES = [
