@@ -74,6 +74,10 @@ interface AuthenticatedConnection {
   readonly firmwareCompatible: boolean;
   lastHealthAtMs: number;
   lastHealth: DeviceHealthPayload;
+  lastBatteryLogAtMs: number;
+  lastLoggedBatteryValid: boolean | null;
+  lastLoggedBatteryPercent: number | null;
+  lastLoggedBatteryState: 'UNKNOWN' | 'CRITICAL' | 'WARNING' | 'NORMAL' | null;
   dispatching: boolean;
   closed: boolean;
   commandTimer: NodeJS.Timeout;
@@ -114,6 +118,22 @@ function associationFromUnknown(value: unknown): { setupId?: string; sessionId?:
 export interface DeviceHealthDecision {
   readonly readinessCode: DeviceReadiness['readinessCode'];
   readonly interruptionReason: 'DEVICE_FAULT' | 'DEVICE_LOW_BATTERY' | null;
+}
+
+function batteryState(health: DeviceHealthPayload): 'UNKNOWN' | 'CRITICAL' | 'WARNING' | 'NORMAL' {
+  if (!health.battery.valid || health.battery.percent === undefined) return 'UNKNOWN';
+  if (health.battery.percent <= DEVICE_INTERRUPT_LOW_BATTERY_PERCENT) return 'CRITICAL';
+  if (health.battery.percent <= 20) return 'WARNING';
+  return 'NORMAL';
+}
+
+function shouldLogBattery(connection: AuthenticatedConnection, health: DeviceHealthPayload, nowMs: number): boolean {
+  const percent = health.battery.valid ? (health.battery.percent ?? null) : null;
+  const state = batteryState(health);
+  return connection.lastLoggedBatteryValid !== health.battery.valid ||
+    connection.lastLoggedBatteryState !== state ||
+    (percent !== null && connection.lastLoggedBatteryPercent !== null && Math.abs(percent - connection.lastLoggedBatteryPercent) >= 5) ||
+    nowMs - connection.lastBatteryLogAtMs >= 60_000;
 }
 
 export function decideDeviceHealth(
@@ -361,6 +381,10 @@ export class DeviceRealtimeGateway {
               firmwareCompatible: isDeviceFirmwareCompatible(hello.payload.firmwareVersion),
               lastHealthAtMs: now,
               lastHealth: { battery: { valid: false }, faults: [] },
+              lastBatteryLogAtMs: 0,
+              lastLoggedBatteryValid: null,
+              lastLoggedBatteryPercent: null,
+              lastLoggedBatteryState: null,
               dispatching: false,
               closed: false,
               commandTimer: setInterval(() => {
@@ -450,8 +474,28 @@ export class DeviceRealtimeGateway {
           }
 
           if (authenticated.type === 'device.heartbeat' || authenticated.type === 'device.status') {
-            connection.lastHealthAtMs = Date.now();
+            const healthReceivedAtMs = Date.now();
+            connection.lastHealthAtMs = healthReceivedAtMs;
             connection.lastHealth = authenticated.payload;
+            if (shouldLogBattery(connection, authenticated.payload, healthReceivedAtMs)) {
+              const percent = authenticated.payload.battery.valid ? (authenticated.payload.battery.percent ?? null) : null;
+              const state = batteryState(authenticated.payload);
+              this.dependencies.logger.info(
+                {
+                  connectionId: connection.connectionId,
+                  deviceFamily: connection.family,
+                  batteryValid: authenticated.payload.battery.valid,
+                  batteryPercent: percent,
+                  batteryState: state,
+                  healthMessageType: authenticated.type,
+                },
+                'Status baterai perangkat diterima',
+              );
+              connection.lastBatteryLogAtMs = healthReceivedAtMs;
+              connection.lastLoggedBatteryValid = authenticated.payload.battery.valid;
+              connection.lastLoggedBatteryPercent = percent;
+              connection.lastLoggedBatteryState = state;
+            }
             await this.updateReadiness(connection);
             return;
           }
