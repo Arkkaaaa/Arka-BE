@@ -316,6 +316,25 @@ export class AiSummaryWorker {
         leaseExpiresAt: null,
       },
     });
+    await prisma.trParticipantSummary.updateMany({
+      where: {
+        attemptCount: { gte: env.OLLAMA_MAX_ATTEMPTS },
+        OR: [
+          { source: 'PENDING' },
+          {
+            source: 'PROCESSING',
+            OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: now } }],
+          },
+        ],
+      },
+      data: {
+        participantSummary: 'Ringkasan otomatis belum tersedia. Statistik seluruh permainan Anda tetap dapat dilihat pada bagian perkembangan di bawah.',
+        clinicianSummary: 'Ringkasan otomatis belum tersedia. Gunakan statistik per mode dan riwayat sesi sebagai sumber utama untuk peninjauan peserta.',
+        source: 'FALLBACK',
+        leaseToken: null,
+        leaseExpiresAt: null,
+      },
+    });
   }
 
   private async claimNext(): Promise<ClaimedSummary | null> {
@@ -571,56 +590,141 @@ export class AiSummaryWorker {
   }
 
   private async processParticipantAggregate(): Promise<void> {
-    const candidate = await this.dependencies.prisma.trParticipantSummary.findFirst({
-      where: { source: { in: ['PENDING', 'DETERMINISTIC'] } },
-      select: { id: true, updatedAt: true, aggregateMetrics: true },
+    const { prisma, env } = this.dependencies;
+    const now = new Date();
+    const eligible = {
+      attemptCount: { lt: env.OLLAMA_MAX_ATTEMPTS },
+      availableAt: { lte: now },
+      OR: [
+        { source: { in: ['PENDING', 'DETERMINISTIC'] } },
+        {
+          source: 'PROCESSING',
+          OR: [{ leaseExpiresAt: null }, { leaseExpiresAt: { lte: now } }],
+        },
+      ],
+    };
+    const candidate = await prisma.trParticipantSummary.findFirst({
+      where: eligible,
+      select: { id: true },
       orderBy: { updatedAt: 'asc' },
     });
     if (!candidate || this.#stopping) return;
-    const claimed = await this.dependencies.prisma.trParticipantSummary.updateMany({
-      where: { id: candidate.id, source: { in: ['PENDING', 'DETERMINISTIC'] }, updatedAt: candidate.updatedAt },
-      data: { source: 'PROCESSING' },
+    const leaseToken = randomUUID();
+    const leaseDurationMs = Math.max(
+      env.OLLAMA_LEASE_MS,
+      env.OLLAMA_TIMEOUT_MS + env.OLLAMA_WORKER_INTERVAL_MS,
+    );
+    const claimed = await prisma.trParticipantSummary.updateMany({
+      where: { id: candidate.id, ...eligible },
+      data: {
+        source: 'PROCESSING',
+        attemptCount: { increment: 1 },
+        leaseToken,
+        leaseExpiresAt: new Date(Date.now() + leaseDurationMs),
+      },
     });
     if (claimed.count !== 1) return;
+    const loaded = await prisma.trParticipantSummary.findFirst({
+      where: { id: candidate.id, source: 'PROCESSING', leaseToken },
+      select: { id: true, attemptCount: true, aggregateMetrics: true },
+    });
+    if (!loaded) return;
+
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.dependencies.env.OLLAMA_TIMEOUT_MS);
+    let leaseLost = false;
+    const timeout = setTimeout(() => controller.abort(), env.OLLAMA_TIMEOUT_MS);
+    const renewal = setInterval(() => {
+      if (this.#stopping) {
+        controller.abort();
+        return;
+      }
+      void prisma.trParticipantSummary.updateMany({
+        where: {
+          id: loaded.id,
+          source: 'PROCESSING',
+          leaseToken,
+          leaseExpiresAt: { gt: new Date() },
+        },
+        data: { leaseExpiresAt: new Date(Date.now() + leaseDurationMs) },
+      }).then(({ count }) => {
+        if (count !== 1) {
+          leaseLost = true;
+          controller.abort();
+        }
+      }).catch(() => {
+        leaseLost = true;
+        controller.abort();
+      });
+    }, Math.max(1, Math.floor(env.OLLAMA_LEASE_MS / 3)));
     timeout.unref();
+    renewal.unref();
     this.#activeRequest = controller;
     try {
       const content = await this.requestProvider(
         [
           { role: 'system', content: PARTICIPANT_AGGREGATE_SYSTEM_PROMPT },
-          { role: 'user', content: participantAggregateUserPrompt(candidate.aggregateMetrics) },
+          { role: 'user', content: participantAggregateUserPrompt(loaded.aggregateMetrics) },
         ],
         controller.signal,
       );
+      if (leaseLost) throw new LeaseLostError();
       const output = parseAggregateSummaryOutput(JSON.parse(content), { participant: 1200, clinician: 1800 });
-      await this.dependencies.prisma.trParticipantSummary.updateMany({
-        where: { id: candidate.id, source: 'PROCESSING' },
+      await prisma.trParticipantSummary.updateMany({
+        where: {
+          id: loaded.id,
+          source: 'PROCESSING',
+          leaseToken,
+          leaseExpiresAt: { gt: new Date() },
+        },
         data: {
           participantSummary: output.participantSummary,
           clinicianSummary: output.clinicianSummary,
           source: 'AI',
+          leaseToken: null,
+          leaseExpiresAt: null,
         },
       });
     } catch (error) {
-      if (!this.#stopping) {
+      if (!this.#stopping && !(error instanceof LeaseLostError)) {
         this.dependencies.logger.warn(
           {
-            summaryId: candidate.id,
-            provider: this.dependencies.env.OLLAMA_PROVIDER,
-            model: this.dependencies.env.OLLAMA_MODEL,
+            summaryId: loaded.id,
+            attemptCount: loaded.attemptCount,
+            provider: env.OLLAMA_PROVIDER,
+            model: env.OLLAMA_MODEL,
             timedOut: error instanceof Error && error.name === 'AbortError',
           },
           'Pembuatan ringkasan keseluruhan gagal',
         );
-        await this.dependencies.prisma.trParticipantSummary.updateMany({
-          where: { id: candidate.id, source: 'PROCESSING' },
-          data: { source: 'FALLBACK' },
+        const unavailable = loaded.attemptCount >= env.OLLAMA_MAX_ATTEMPTS;
+        await prisma.trParticipantSummary.updateMany({
+          where: {
+            id: loaded.id,
+            source: 'PROCESSING',
+            leaseToken,
+            leaseExpiresAt: { gt: new Date() },
+          },
+          data: unavailable
+            ? {
+                participantSummary: 'Ringkasan otomatis belum tersedia. Statistik seluruh permainan Anda tetap dapat dilihat pada bagian perkembangan di bawah.',
+                clinicianSummary: 'Ringkasan otomatis belum tersedia. Gunakan statistik per mode dan riwayat sesi sebagai sumber utama untuk peninjauan peserta.',
+                source: 'FALLBACK',
+                leaseToken: null,
+                leaseExpiresAt: null,
+              }
+            : {
+                source: 'PENDING',
+                leaseToken: null,
+                leaseExpiresAt: null,
+                availableAt: new Date(
+                  Date.now() + retryBackoffMs(loaded.attemptCount, env.OLLAMA_WORKER_INTERVAL_MS),
+                ),
+              },
         });
       }
     } finally {
       clearTimeout(timeout);
+      clearInterval(renewal);
       if (this.#activeRequest === controller) this.#activeRequest = null;
     }
   }

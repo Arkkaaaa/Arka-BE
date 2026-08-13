@@ -335,11 +335,16 @@ model TrParticipantSummary {
   aggregateMetrics   Json
   participantSummary String        @db.VarChar(1200)
   clinicianSummary   String        @db.VarChar(1800)
-  source              String        @default("DETERMINISTIC") @db.VarChar(32)
-  createdAt           DateTime      @default(now())
-  updatedAt           DateTime      @updatedAt
+  source             String        @default("DETERMINISTIC") @db.VarChar(32)
+  attemptCount       Int           @default(0)
+  leaseToken         String?       @db.Uuid
+  leaseExpiresAt     DateTime?
+  availableAt        DateTime      @default(now())
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
 
   @@index([institutionId, updatedAt])
+  @@index([source, availableAt, leaseExpiresAt])
 }
 
 model TrParticipantModeSummary {

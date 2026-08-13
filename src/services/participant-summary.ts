@@ -98,6 +98,7 @@ export async function upsertParticipantSummary(
       participantSummary: '',
       clinicianSummary: '',
       source: 'PENDING',
+      availableAt: new Date(),
     },
     update: {
       savedSessionsTotal: summary.aggregate.sessions,
@@ -105,6 +106,10 @@ export async function upsertParticipantSummary(
       participantSummary: '',
       clinicianSummary: '',
       source: 'PENDING',
+      attemptCount: 0,
+      leaseToken: null,
+      leaseExpiresAt: null,
+      availableAt: new Date(),
     },
   });
   for (const metrics of Object.values(summary.modeAggregates)) {
