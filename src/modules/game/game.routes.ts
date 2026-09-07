@@ -1,8 +1,6 @@
 import { Router } from 'express';
-import { asyncHandler } from '../../middleware/errors.js';
-import { rateLimit } from '../../middleware/rate-limit.js';
-import { validateBody, validateParams, validateQuery } from '../../middleware/validate.js';
-import type { RedisClient } from '../../db/redis.js';
+import { asyncHandler, rateLimit, validateBody, validateParams, validateQuery } from '../../middleware/index.js';
+import type { RedisClient } from '../../db/index.js';
 import { ReportQuerySchema } from '../../schemas/index.js';
 import type { GameController } from './game.controller.js';
 import {

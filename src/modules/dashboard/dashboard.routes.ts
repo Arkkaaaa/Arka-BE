@@ -1,7 +1,6 @@
 import { DashboardLeaderboardQuerySchema } from '../../schemas/index.js';
 import { Router } from 'express';
-import { asyncHandler } from '../../middleware/errors.js';
-import { validateQuery } from '../../middleware/validate.js';
+import { asyncHandler, validateQuery } from '../../middleware/index.js';
 import type { DashboardController } from './dashboard.controller.js';
 
 export function createDashboardRoutes(controller: DashboardController): Router {

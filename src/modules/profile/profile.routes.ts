@@ -1,6 +1,5 @@
 import { Router } from 'express';
-import { asyncHandler } from '../../middleware/errors.js';
-import { validateBody } from '../../middleware/validate.js';
+import { asyncHandler, validateBody } from '../../middleware/index.js';
 import { UpdateProfileRequestSchema } from '../../schemas/index.js';
 import type { ProfileController } from './profile.controller.js';
 

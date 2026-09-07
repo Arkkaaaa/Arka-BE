@@ -58,10 +58,11 @@ const REDACT_PATHS = [
 ];
 
 const SENSITIVE_KEY =
-  /(?:authorization|cookie|password|secret|token|credential|proof|participantreference|participantid|displayname|telemetry|fsrraw|prompt|response|email|name|image|sessionid|metrics|summarytext|observations|userid|institutionid|deviceid|preparationid)/iu;
+  /(?:authorization|cookie|password|secret|token|apikey|otp|buffer|credential|proof|participantreference|participantid|displayname|telemetry|fsrraw|prompt|response|email|name|image|sessionid|metrics|summarytext|observations|userid|institutionid|deviceid|preparationid)/iu;
 
 function redactValue(value: unknown, seen: WeakSet<object>): unknown {
   if (value === null || typeof value !== 'object') return value;
+  if (Buffer.isBuffer(value)) return '[REDACTED]';
   if (value instanceof Error)
     return { name: value.name, message: value.message, stack: value.stack };
   if (seen.has(value)) return '[Circular]';
