@@ -112,6 +112,57 @@ function fixture() {
 
 const health = { battery: { valid: true, percent: 100 }, faults: [] };
 
+for (const [battery, faults, reason] of [
+  [{ valid: true, percent: 10 }, [], 'DEVICE_LOW_BATTERY'],
+  [{ valid: false }, [], null],
+  [{ valid: true, percent: 11 }, [], null],
+]) {
+  test(`health diagnostics explain battery ${JSON.stringify(battery)}`, async (t) => {
+    const f = fixture();
+    t.after(() => f.gateway.close());
+    const socket = await f.connect();
+    socket.message(f.envelope('device.status', 1, { battery, faults }));
+    await until(() => [...f.values.keys()].some((key) => key.endsWith(':readiness')));
+    await nextTurn();
+    const diagnostic = f.warnings.find(([fields]) => fields.terminalReason === reason);
+    if (!reason) {
+      assert.equal(f.warnings.length, 0);
+      return;
+    }
+    assert.ok(diagnostic);
+    assert.equal(diagnostic[0].batteryPercent, 10);
+    assert.equal(diagnostic[0].batteryState, 'CRITICAL');
+    assert.equal(diagnostic[0].readinessCode, 'NOT_READY_LOW_BATTERY');
+    assert.equal(diagnostic[0].thresholdPercent, 10);
+    assert.match(diagnostic[1], /baterai/i);
+    assert.match(diagnostic[0].suggestedAction, /isi daya/i);
+  });
+}
+
+for (const deviceBound of [false, true]) {
+  test(`binding timeout diagnostics report pending prerequisites (bound=${deviceBound})`, async () => {
+    const warnings = [];
+    const runtime = new AuthoritativeRuntime({
+      redis: {},
+      prisma: { trGameSession: { async findUnique() { return { bindingDeadlineAt: new Date(1000) }; } } },
+      logger: { warn(...args) { warnings.push(args); } },
+    });
+    runtime.loadSession = async () => ({ status: 'BINDING', mode: 'MOTOR_GRIP', deviceBound, companionPresent: false });
+    runtime.reconcileCompanionPresence = async () => {};
+    const terminated = [];
+    runtime.terminateSession = async (...args) => terminated.push(args);
+    await runtime.tickSession('private-session', 1500);
+    assert.deepEqual(terminated, [['private-session', 'ABORTED', 'BINDING_TIMEOUT']]);
+    const [fields, message] = warnings[0] ?? [];
+    assert.ok(fields);
+    assert.equal(fields.bindingDeadlineAt, '1970-01-01T00:00:01.000Z');
+    assert.equal(fields.overdueMs, 500);
+    assert.deepEqual(fields.pendingStages, deviceBound ? ['COMPANION_PRESENCE'] : ['DEVICE_BIND_ACK', 'COMPANION_PRESENCE']);
+    assert.match(message, /batas waktu/i);
+    assert.ok(!JSON.stringify(warnings).includes('private-session'));
+  });
+}
+
 function handoffFixture() {
   const setupId = randomUUID();
   const sessionId = randomUUID();
@@ -258,6 +309,12 @@ test('forward gaps inside an authenticated connection are still rejected', async
   socket.message(f.envelope('device.heartbeat', 100, health));
   await until(() => socket.readyState === 3);
   assert.ok(f.interruptions.includes('DEVICE_SEQUENCE_GAP'));
+  const [fields, message] = f.warnings.find(([entry]) => entry.terminalReason === 'DEVICE_SEQUENCE_GAP');
+  assert.equal(fields.receivedSequence, 100);
+  assert.equal(fields.lastAcceptedSequence, 1);
+  assert.equal(fields.expectedNextSequence, 2);
+  assert.equal(fields.sequenceGap, 99);
+  assert.match(message, /loncatan nomor urut/);
 });
 
 test('reconnect does not accept a stale sequence', async (t) => {

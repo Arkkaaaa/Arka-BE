@@ -1419,8 +1419,25 @@ export class AuthoritativeRuntime implements RuntimeGateway {
         where: { id: sessionId },
         select: { bindingDeadlineAt: true },
       });
-      if (session && session.bindingDeadlineAt.getTime() <= now)
+      if (session && session.bindingDeadlineAt.getTime() <= now) {
+        this.dependencies.logger.warn(
+          {
+            terminalReason: 'BINDING_TIMEOUT',
+            mode: runtime.mode,
+            deviceBound: runtime.deviceBound,
+            companionPresent: runtime.companionPresent,
+            bindingDeadlineAt: session.bindingDeadlineAt.toISOString(),
+            overdueMs: now - session.bindingDeadlineAt.getTime(),
+            pendingStages: [
+              ...(!runtime.deviceBound ? ['DEVICE_BIND_ACK'] : []),
+              ...(!runtime.companionPresent ? ['COMPANION_PRESENCE'] : []),
+            ],
+            suggestedAction: 'Periksa ACK pairing perangkat dan koneksi realtime layar pendamping. Timeout saja tidak membuktikan penyebab jaringan atau baterai.',
+          },
+          'Pairing belum selesai saat batas waktu tercapai; sesi dibatalkan',
+        );
         await this.terminateSession(sessionId, 'ABORTED', 'BINDING_TIMEOUT');
+      }
     } else if (
       runtime.status === 'COUNTDOWN' &&
       runtime.countdownEndsAtMs !== null &&

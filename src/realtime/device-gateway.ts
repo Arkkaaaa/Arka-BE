@@ -191,6 +191,7 @@ export class DeviceRealtimeGateway {
     let connection: AuthenticatedConnection | null = null;
     let processing = Promise.resolve();
     let sequenceInitialized = false;
+    let lastAcceptedSequence: number | null = null;
     let associationRevision = 0;
     let pendingTelemetry: (() => Promise<void>) | null = null;
     let telemetryProcessing = false;
@@ -449,9 +450,30 @@ export class DeviceRealtimeGateway {
             !sequenceInitialized &&
               (authenticated.type === 'device.status' || authenticated.type === 'device.heartbeat'),
           );
-          if (decision === 'ACCEPT' || decision === 'TELEMETRY_DROPPED') sequenceInitialized = true;
+          if (decision === 'ACCEPT' || decision === 'TELEMETRY_DROPPED') {
+            sequenceInitialized = true;
+            lastAcceptedSequence = authenticated.sequence;
+          }
           if (decision === 'DUPLICATE' || decision === 'TELEMETRY_DROPPED') return;
           if (decision !== 'ACCEPT') {
+            this.dependencies.logger.warn(
+              {
+                connectionId: connection.connectionId,
+                deviceFamily: connection.family,
+                terminalReason: `DEVICE_SEQUENCE_${decision}`,
+                messageType: authenticated.type,
+                receivedSequence: authenticated.sequence,
+                lastAcceptedSequence,
+                expectedNextSequence: lastAcceptedSequence === null ? null : lastAcceptedSequence + 1,
+                sequenceGap: lastAcceptedSequence === null ? null : authenticated.sequence - lastAcceptedSequence,
+                suggestedAction: 'Periksa urutan pengiriman pesan perangkat dan log koneksi sebelumnya; urutan terakhir hanya mencakup koneksi ini.',
+              },
+              decision === 'GAP'
+                ? 'Pesan ditolak karena loncatan nomor urut melebihi batas yang diizinkan'
+                : decision === 'STALE'
+                  ? 'Pesan ditolak karena nomor urut sudah tertinggal atau pernah diproses'
+                  : 'Pesan ditolak karena laju pengiriman melebihi batas',
+            );
             await this.runtime.interruptAssociation(
               connection.family,
               associationFromUnknown(authenticated),
@@ -625,8 +647,30 @@ export class DeviceRealtimeGateway {
       },
       'Status kesiapan perangkat diperbarui',
     );
-    if (decision.interruptionReason)
+    if (decision.interruptionReason) {
+      this.dependencies.logger.warn(
+        {
+          connectionId: connection.connectionId,
+          deviceFamily: connection.family,
+          terminalReason: decision.interruptionReason,
+          batteryValid: health.battery.valid,
+          batteryPercent,
+          batteryState: batteryState(health),
+          thresholdPercent: DEVICE_INTERRUPT_LOW_BATTERY_PERCENT,
+          readinessCode: decision.readinessCode,
+          firmwareCompatible: connection.firmwareCompatible,
+          faultCount: health.faults.length,
+          lockState: lock?.state ?? null,
+          suggestedAction: decision.interruptionReason === 'DEVICE_LOW_BATTERY'
+            ? 'Isi daya perangkat hingga baterai di atas batas minimum, lalu ulangi pairing.'
+            : 'Periksa status fault pada perangkat sebelum mengulang pairing.',
+        },
+        decision.interruptionReason === 'DEVICE_LOW_BATTERY'
+          ? 'Perangkat tidak aman untuk sesi: baterai valid berada pada atau di bawah batas minimum'
+          : 'Perangkat melaporkan fault; sesi terkait akan dihentikan demi keamanan',
+      );
       await this.runtime.interruptDeviceFamily(connection.family, decision.interruptionReason);
+    }
   }
 
   private async handleAcknowledgement(
