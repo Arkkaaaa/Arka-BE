@@ -190,6 +190,8 @@ export class DeviceRealtimeGateway {
     let family: DeviceFamily | null = null;
     let connection: AuthenticatedConnection | null = null;
     let processing = Promise.resolve();
+    let sequenceInitialized = false;
+    let associationRevision = 0;
     let pendingTelemetry: (() => Promise<void>) | null = null;
     let telemetryProcessing = false;
     let closing = false;
@@ -444,7 +446,10 @@ export class DeviceRealtimeGateway {
             connection.hello.bootId,
             authenticated,
             receivedAtMs,
+            !sequenceInitialized &&
+              (authenticated.type === 'device.status' || authenticated.type === 'device.heartbeat'),
           );
+          if (decision === 'ACCEPT' || decision === 'TELEMETRY_DROPPED') sequenceInitialized = true;
           if (decision === 'DUPLICATE' || decision === 'TELEMETRY_DROPPED') return;
           if (decision !== 'ACCEPT') {
             await this.runtime.interruptAssociation(
@@ -500,61 +505,65 @@ export class DeviceRealtimeGateway {
             return;
           }
           if (authenticated.type === 'device.commandAck') {
+            associationRevision += 1;
             await this.handleAcknowledgement(connection, authenticated, receivedAtMs);
             return;
           }
-          const association =
-            'setupId' in authenticated
-              ? { type: 'SETUP' as const, id: authenticated.setupId }
-              : { type: 'SESSION' as const, id: authenticated.sessionId };
-          const associationDecision = await this.associationDecision(
-            connection.family,
-            association.type,
-            association.id,
-          );
-          if (associationDecision === 'DROP') return;
-          if (associationDecision === 'REJECT') {
-            await this.runtime.interruptAssociation(
-              connection.family,
+          const inputConnection = connection;
+          const inputRevision = associationRevision;
+          const processInput = async (): Promise<void> => {
+            if (closing || inputRevision !== associationRevision) return;
+            const association =
+              'setupId' in authenticated
+                ? { type: 'SETUP' as const, id: authenticated.setupId }
+                : { type: 'SESSION' as const, id: authenticated.sessionId };
+            const associationDecision = await this.associationDecision(
+              inputConnection.family,
+              association.type,
+              association.id,
+            );
+            if (closing || inputRevision !== associationRevision || associationDecision === 'DROP') return;
+            if (associationDecision === 'REJECT') {
+              await this.runtime.interruptAssociation(
+                inputConnection.family,
+                association.type === 'SETUP'
+                  ? { setupId: association.id }
+                  : { sessionId: association.id },
+                'INVALID_DEVICE_ASSOCIATION',
+              );
+              await cleanup('INVALID_DEVICE_ASSOCIATION');
+              closeProtocol(socket, 'Asosiasi perangkat ditolak');
+              return;
+            }
+            const trustedInput = {
+              receivedAtMs,
+              connectionId: inputConnection.connectionId,
+              bootId: inputConnection.hello.bootId,
+              messageId: authenticated.messageId,
+              sequence: authenticated.sequence,
+              sentAtMs: authenticated.sentAtMs,
+            };
+            const target =
               association.type === 'SETUP'
                 ? { setupId: association.id }
-                : { sessionId: association.id },
-              'INVALID_DEVICE_ASSOCIATION',
-            );
-            await cleanup('INVALID_DEVICE_ASSOCIATION');
-            closeProtocol(socket, 'Asosiasi perangkat ditolak');
-            return;
-          }
-          const trustedInput = {
-            receivedAtMs,
-            connectionId: connection.connectionId,
-            bootId: connection.hello.bootId,
-            messageId: authenticated.messageId,
-            sequence: authenticated.sequence,
-            sentAtMs: authenticated.sentAtMs,
-          };
-          const target =
-            association.type === 'SETUP'
-              ? { setupId: association.id }
-              : { sessionId: association.id };
-          if (authenticated.type === 'telemetry.fsr') {
-            const telemetryConnection = connection;
-            scheduleTelemetry(async () => {
-              if (closing) return;
+                : { sessionId: association.id };
+            if (authenticated.type === 'telemetry.fsr') {
               await this.runtime.handleFsr(
-                telemetryConnection.family,
+                inputConnection.family,
                 target,
                 authenticated.payload.fsrRaw,
                 trustedInput,
               );
-            });
-          } else
-            await this.runtime.handleButton(
-              connection.family,
-              target,
-              authenticated.payload.buttonCode,
-              trustedInput,
-            );
+            } else
+              await this.runtime.handleButton(
+                inputConnection.family,
+                target,
+                authenticated.payload.buttonCode,
+                trustedInput,
+              );
+          };
+          if (authenticated.type === 'telemetry.fsr') scheduleTelemetry(processInput);
+          else await processInput();
       };
       const handleError = (error: unknown): void => {
         this.dependencies.logger.warn({ err: error }, 'Pesan perangkat gagal diproses');

@@ -23,7 +23,7 @@ local fsr = ARGV[4] == '1'
 local current = tonumber(redis.call('GET', sequenceKey) or '0')
 if redis.call('EXISTS', messageKey) == 1 then return 'DUPLICATE' end
 if proposed <= current then return 'STALE' end
-if proposed - current > maxGap then return 'GAP' end
+if proposed - current > maxGap and ARGV[5] ~= '1' then return 'GAP' end
 local rate = redis.call('INCR', rateKey)
 if rate == 1 then redis.call('EXPIRE', rateKey, 2) end
 if rate > maxRate then return 'RATE_LIMITED' end
@@ -45,6 +45,7 @@ export async function enforceDeviceSequence(
   bootId: string,
   message: AuthenticatedDeviceMessage,
   receivedAtMs = Date.now(),
+  allowForwardResync = false,
 ): Promise<DeviceSequenceDecision> {
   const prefix = `${redisPrefixForFamily(family)}:device:boot:${bootId}`;
   const second = Math.floor(receivedAtMs / 1_000);
@@ -59,6 +60,7 @@ export async function enforceDeviceSequence(
     String(DEVICE_MAX_SEQUENCE_GAP),
     String(DEVICE_MAX_MESSAGES_PER_SECOND),
     message.type === 'telemetry.fsr' ? '1' : '0',
+    allowForwardResync ? '1' : '0',
   );
   if (
     result === 'ACCEPT' ||

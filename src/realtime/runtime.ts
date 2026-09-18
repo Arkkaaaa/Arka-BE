@@ -981,13 +981,30 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     setupId: string,
     commandId: string,
   ): Promise<void> {
+    const lock = await readDeviceLock(this.dependencies.redis, family);
+    if (!lock || lock.setupId !== setupId) return;
+    if (lock.holderType === 'SESSION' && lock.sessionId) {
+      await this.runSessionMutation(lock.sessionId, () =>
+        this.handleSetupUnboundUnlocked(family, setupId, commandId),
+      );
+      return;
+    }
+    await this.handleSetupUnboundUnlocked(family, setupId, commandId);
+  }
+
+  private async handleSetupUnboundUnlocked(
+    family: DeviceFamily,
+    setupId: string,
+    commandId: string,
+  ): Promise<void> {
     const session = await this.dependencies.prisma.trGameSession.findFirst({
       where: { preparation: { setupId }, status: 'BINDING' },
     });
     if (session && deviceFamilyForMode(session.mode) !== family) return;
     if (!session) {
       const lock = await readDeviceLock(this.dependencies.redis, family);
-      if (lock?.setupId === setupId) await clearDeviceOwnership(this.dependencies.redis, family, lock.lockId);
+      if (lock?.setupId === setupId && lock.state === 'RELEASING')
+        await clearDeviceOwnership(this.dependencies.redis, family, lock.lockId);
       return;
     }
     const runtime = await this.loadSession(session.id);
@@ -1018,7 +1035,11 @@ export class AuthoritativeRuntime implements RuntimeGateway {
     });
   }
 
-  async handleSessionBound(family: DeviceFamily, sessionId: string): Promise<void> {
+  handleSessionBound(family: DeviceFamily, sessionId: string): Promise<void> {
+    return this.runSessionMutation(sessionId, () => this.handleSessionBoundUnlocked(family, sessionId));
+  }
+
+  private async handleSessionBoundUnlocked(family: DeviceFamily, sessionId: string): Promise<void> {
     const updated = await this.dependencies.prisma.trGameSession.updateMany({
       where: {
         id: sessionId,
